@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-CN" style="color-scheme: dark">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#202020" />
+    <link rel="stylesheet" href="styles.css" />
+    <title>赫朝录音命名器</title>
+  </head>
+  <body>
+    <main id="panelMain" class="app-shell" data-panel-state="loading" aria-busy="true">
+      <header class="product-bar">
+        <div class="product-mark" aria-hidden="true">
+          <span></span><span></span><span></span><span></span><span></span>
+        </div>
+        <div class="product-copy">
+          <h1>赫朝录音命名器</h1>
+          <div class="version">0.3.0</div>
+        </div>
+        <div id="monitorStatus" class="monitor-status monitor-status--busy" role="status" aria-live="polite">
+          <span class="status-light" aria-hidden="true"></span>
+          <span id="monitorStatusText">连接中</span>
+        </div>
+      </header>
+
+      <section class="state-band" aria-labelledby="stateTitle">
+        <div class="state-heading">
+          <div class="state-symbol" aria-hidden="true"><span></span><span></span><span></span></div>
+          <div class="state-copy">
+            <div id="stateKicker" class="state-kicker">正在读取 Premiere</div>
+            <h2 id="stateTitle">检查当前工程</h2>
+          </div>
+        </div>
+        <p id="stateDescription" class="state-description">正在核对工程、活动序列和采集盘。</p>
+        <div class="primary-actions">
+          <button id="startButton" class="button button--primary" type="button" disabled>正在检查</button>
+          <button id="stopButton" class="button button--secondary" type="button" hidden>暂停自动命名</button>
+        </div>
+        <div class="secondary-actions" aria-label="辅助操作">
+          <button id="scanButton" class="button button--secondary" type="button" disabled>扫描遗漏</button>
+          <button id="refreshButton" class="button button--quiet" type="button" disabled>刷新项目</button>
+        </div>
+      </section>
+
+      <section class="guide-band" aria-labelledby="guideTitle">
+        <div class="section-head guide-head">
+          <h2 id="guideTitle">现在怎么用</h2>
+          <span id="guideStatus" class="section-summary">正在连接 Premiere</span>
+        </div>
+        <ol class="guide-steps" aria-label="原生录音操作流程">
+          <li id="guideProject" class="guide-step" data-guide-status="waiting">
+            <span class="guide-marker" aria-hidden="true">1</span>
+            <span class="guide-copy">
+              <span class="guide-title">面板自动待命</span>
+              <span class="guide-detail">不选目录，也不用点开始监听</span>
+            </span>
+          </li>
+          <li id="guideFolder" class="guide-step" data-guide-status="waiting">
+            <span class="guide-marker" aria-hidden="true">2</span>
+            <span class="guide-copy">
+              <span class="guide-title">点击时间线音轨麦克风</span>
+              <span class="guide-detail">就是 Premiere 自带的“画外音录制”</span>
+            </span>
+          </li>
+          <li id="guideListen" class="guide-step" data-guide-status="waiting">
+            <span class="guide-marker" aria-hidden="true">3</span>
+            <span class="guide-copy">
+              <span class="guide-title">停止录音后自动整理</span>
+              <span class="guide-detail">磁盘名、素材名和媒体路径一起更新</span>
+            </span>
+          </li>
+        </ol>
+        <div class="guide-route" aria-label="自动处理路径">
+          <div class="guide-route-node"><span class="guide-route-badge">REC</span><span>原生录音</span></div>
+          <span class="guide-route-line" aria-hidden="true"></span>
+          <div class="guide-route-node"><span class="guide-route-badge guide-route-badge--accent">UUID</span><span>唯一文件名</span></div>
+          <span class="guide-route-line" aria-hidden="true"></span>
+          <div class="guide-route-node"><span class="guide-route-badge">LINK</span><span>自动重链接</span></div>
+        </div>
+      </section>
+
+      <section class="readiness-band" aria-labelledby="readinessTitle">
+        <div class="section-head">
+          <h2 id="readinessTitle">当前连接</h2>
+          <span id="readinessCount" class="section-summary">0/2 已完成</span>
+        </div>
+        <ol class="readiness-list">
+          <li id="readinessProject" class="readiness-item" data-ready="false">
+            <span class="readiness-marker" data-step="1" aria-hidden="true"></span>
+            <span class="readiness-copy">
+              <span class="readiness-name">工程已保存</span>
+              <span id="projectName" class="readiness-value">正在读取</span>
+            </span>
+          </li>
+          <li id="readinessSequence" class="readiness-item" data-ready="false">
+            <span class="readiness-marker" data-step="2" aria-hidden="true"></span>
+            <span class="readiness-copy">
+              <span class="readiness-name">活动序列</span>
+              <span id="sequenceName" class="readiness-value">正在读取</span>
+            </span>
+          </li>
+          <li id="readinessFolder" class="readiness-item readiness-item--optional" data-ready="false">
+            <span class="readiness-marker readiness-marker--location" aria-hidden="true">P</span>
+            <span class="readiness-copy">
+              <span class="readiness-name">录音位置</span>
+              <span id="watchFolder" class="readiness-value readiness-value--path">首次录音后自动识别</span>
+            </span>
+            <button id="chooseFolderButton" class="button button--compact button--quiet" type="button" disabled>备用</button>
+          </li>
+        </ol>
+      </section>
+
+      <section class="pipeline-band" aria-labelledby="pipelineTitle">
+        <div class="section-head">
+          <h2 id="pipelineTitle">录音处理</h2>
+          <span id="pipelineSummary" class="section-summary" aria-live="polite">等待自动布防</span>
+        </div>
+        <ol id="pipelineList" class="pipeline-list" aria-label="录音处理进度">
+          <li id="pipelineFound" class="pipeline-step pipeline-step--waiting">
+            <span class="pipeline-marker" aria-hidden="true">1</span><span class="pipeline-label">发现 WAV</span>
+          </li>
+          <li id="pipelineStable" class="pipeline-step pipeline-step--waiting">
+            <span class="pipeline-marker" aria-hidden="true">2</span><span class="pipeline-label">等待写完</span>
+          </li>
+          <li id="pipelineRename" class="pipeline-step pipeline-step--waiting">
+            <span class="pipeline-marker" aria-hidden="true">3</span><span class="pipeline-label">重命名</span>
+          </li>
+          <li id="pipelineRelink" class="pipeline-step pipeline-step--waiting">
+            <span class="pipeline-marker" aria-hidden="true">4</span><span class="pipeline-label">重链接</span>
+          </li>
+        </ol>
+
+        <div class="filename-preview" aria-label="文件名转换预览">
+          <div class="preview-head">
+            <span id="previewCaption">命名示例</span>
+            <span class="preview-format">项目名 + UUID</span>
+          </div>
+          <div class="filename-row filename-row--source">
+            <span class="filename-label">录制生成</span><code id="previewSourceName">音频 2_1.wav</code>
+          </div>
+          <div class="filename-route" aria-hidden="true"></div>
+          <div class="filename-row filename-row--target">
+            <span class="filename-label">整理后</span><code id="previewTargetName">318最终版-7f3c9a2e4b1d48f0a6c1e8d2b9f04a77.wav</code>
+          </div>
+        </div>
+      </section>
+
+      <section class="metrics" aria-label="本次运行统计">
+        <div class="metric"><span id="processedCount" class="metric-value">0</span><span class="metric-label">已完成</span></div>
+        <div class="metric"><span id="pendingCount" class="metric-value">0</span><span class="metric-label">等待中</span></div>
+        <div class="metric"><span id="errorCount" class="metric-value">0</span><span class="metric-label">异常</span></div>
+      </section>
+
+      <section class="activity" aria-labelledby="activityTitle">
+        <div class="activity-head">
+          <h2 id="activityTitle">最近活动</h2>
+          <button id="clearLogButton" class="text-action" type="button">清空</button>
+        </div>
+        <ol id="activityLog" class="activity-list" aria-live="polite" aria-relevant="additions">
+          <li class="activity-empty">等待第一条录音</li>
+        </ol>
+      </section>
+    </main>
+
+    <dialog id="scanDialog" class="scan-dialog" aria-labelledby="scanDialogTitle" aria-describedby="scanDialogDescription">
+      <div class="dialog-shell">
+        <header class="dialog-head">
+          <div>
+            <h2 id="scanDialogTitle">处理遗漏录音</h2>
+            <span id="scanDialogCount" class="dialog-count"></span>
+          </div>
+          <button id="closeScanButton" class="icon-action" type="button" aria-label="关闭扫描预览" title="关闭">×</button>
+        </header>
+        <div id="scanPreview" class="scan-preview"></div>
+        <div id="scanDialogDescription" class="dialog-alert">将修改磁盘文件名、媒体路径和 Premiere 素材名。</div>
+        <footer class="dialog-actions">
+          <button id="cancelScanButton" class="button button--quiet" type="button">取消</button>
+          <button id="confirmScanButton" class="button button--primary" type="button">确认处理</button>
+        </footer>
+      </div>
+    </dialog>
+
+    <script src="src/core.js"></script>
+    <script src="src/state.js"></script>
+    <script src="src/panel-state.js"></script>
+    <script src="src/folder-readiness.js"></script>
+    <script src="src/media-candidates.js"></script>
+    <script src="src/monitoring-policy.js"></script>
+    <script src="src/transaction.js"></script>
+    <script src="src/coordination.js"></script>
+    <script src="src/main.js"></script>
+  </body>
+</html>
