@@ -15,7 +15,7 @@
         </div>
         <div class="product-copy">
           <h1>赫朝录音命名器</h1>
-          <div class="version">0.3.0</div>
+          <div class="version">0.3.2</div>
         </div>
         <div id="monitorStatus" class="monitor-status monitor-status--busy" role="status" aria-live="polite">
           <span class="status-light" aria-hidden="true"></span>
@@ -39,6 +39,41 @@
         <div class="secondary-actions" aria-label="辅助操作">
           <button id="scanButton" class="button button--secondary" type="button" disabled>扫描遗漏</button>
           <button id="refreshButton" class="button button--quiet" type="button" disabled>刷新项目</button>
+        </div>
+      </section>
+
+      <section class="pipeline-band" aria-labelledby="pipelineTitle">
+        <div class="section-head">
+          <h2 id="pipelineTitle">录音处理</h2>
+          <span id="pipelineSummary" class="section-summary" aria-live="polite">等待自动布防</span>
+        </div>
+        <ol id="pipelineList" class="pipeline-list" aria-label="录音处理进度">
+          <li id="pipelineFound" class="pipeline-step pipeline-step--waiting">
+            <span class="pipeline-marker" aria-hidden="true">1</span><span class="pipeline-label">发现 WAV</span>
+          </li>
+          <li id="pipelineStable" class="pipeline-step pipeline-step--waiting">
+            <span class="pipeline-marker" aria-hidden="true">2</span><span class="pipeline-label">等待写完</span>
+          </li>
+          <li id="pipelineRename" class="pipeline-step pipeline-step--waiting">
+            <span class="pipeline-marker" aria-hidden="true">3</span><span class="pipeline-label">重命名</span>
+          </li>
+          <li id="pipelineRelink" class="pipeline-step pipeline-step--waiting">
+            <span class="pipeline-marker" aria-hidden="true">4</span><span class="pipeline-label">链接并改片段</span>
+          </li>
+        </ol>
+
+        <div class="filename-preview" aria-label="文件名转换预览">
+          <div class="preview-head">
+            <span id="previewCaption">命名示例</span>
+            <span class="preview-format">项目名 + UUID</span>
+          </div>
+          <div class="filename-row filename-row--source">
+            <span class="filename-label">录制生成</span><code id="previewSourceName">音频 2_1.wav</code>
+          </div>
+          <div class="filename-route" aria-hidden="true"></div>
+          <div class="filename-row filename-row--target">
+            <span class="filename-label">整理后</span><code id="previewTargetName">318最终版-7f3c9a2e4b1d48f0a6c1e8d2b9f04a77.wav</code>
+          </div>
         </div>
       </section>
 
@@ -66,7 +101,7 @@
             <span class="guide-marker" aria-hidden="true">3</span>
             <span class="guide-copy">
               <span class="guide-title">停止录音后自动整理</span>
-              <span class="guide-detail">磁盘名、素材名和媒体路径一起更新</span>
+              <span class="guide-detail">磁盘名、素材名、片段名和媒体路径一起更新</span>
             </span>
           </li>
         </ol>
@@ -110,41 +145,6 @@
         </ol>
       </section>
 
-      <section class="pipeline-band" aria-labelledby="pipelineTitle">
-        <div class="section-head">
-          <h2 id="pipelineTitle">录音处理</h2>
-          <span id="pipelineSummary" class="section-summary" aria-live="polite">等待自动布防</span>
-        </div>
-        <ol id="pipelineList" class="pipeline-list" aria-label="录音处理进度">
-          <li id="pipelineFound" class="pipeline-step pipeline-step--waiting">
-            <span class="pipeline-marker" aria-hidden="true">1</span><span class="pipeline-label">发现 WAV</span>
-          </li>
-          <li id="pipelineStable" class="pipeline-step pipeline-step--waiting">
-            <span class="pipeline-marker" aria-hidden="true">2</span><span class="pipeline-label">等待写完</span>
-          </li>
-          <li id="pipelineRename" class="pipeline-step pipeline-step--waiting">
-            <span class="pipeline-marker" aria-hidden="true">3</span><span class="pipeline-label">重命名</span>
-          </li>
-          <li id="pipelineRelink" class="pipeline-step pipeline-step--waiting">
-            <span class="pipeline-marker" aria-hidden="true">4</span><span class="pipeline-label">重链接</span>
-          </li>
-        </ol>
-
-        <div class="filename-preview" aria-label="文件名转换预览">
-          <div class="preview-head">
-            <span id="previewCaption">命名示例</span>
-            <span class="preview-format">项目名 + UUID</span>
-          </div>
-          <div class="filename-row filename-row--source">
-            <span class="filename-label">录制生成</span><code id="previewSourceName">音频 2_1.wav</code>
-          </div>
-          <div class="filename-route" aria-hidden="true"></div>
-          <div class="filename-row filename-row--target">
-            <span class="filename-label">整理后</span><code id="previewTargetName">318最终版-7f3c9a2e4b1d48f0a6c1e8d2b9f04a77.wav</code>
-          </div>
-        </div>
-      </section>
-
       <section class="metrics" aria-label="本次运行统计">
         <div class="metric"><span id="processedCount" class="metric-value">0</span><span class="metric-label">已完成</span></div>
         <div class="metric"><span id="pendingCount" class="metric-value">0</span><span class="metric-label">等待中</span></div>
@@ -172,7 +172,7 @@
           <button id="closeScanButton" class="icon-action" type="button" aria-label="关闭扫描预览" title="关闭">×</button>
         </header>
         <div id="scanPreview" class="scan-preview"></div>
-        <div id="scanDialogDescription" class="dialog-alert">将修改磁盘文件名、媒体路径和 Premiere 素材名。</div>
+        <div id="scanDialogDescription" class="dialog-alert">将同步修改磁盘文件名、媒体路径、Premiere 素材名和时间线片段名。</div>
         <footer class="dialog-actions">
           <button id="cancelScanButton" class="button button--quiet" type="button">取消</button>
           <button id="confirmScanButton" class="button button--primary" type="button">确认处理</button>

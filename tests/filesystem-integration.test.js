@@ -31,6 +31,13 @@ test('renameAndRelink performs a real Unicode filesystem rename', async (t) => {
       return () => { this.name = nextName; };
     },
   };
+  const trackItem = {
+    name: '音频 2_1.wav',
+    async getName() { return this.name; },
+    createSetNameAction(nextName) {
+      return () => { this.name = nextName; };
+    },
+  };
   const project = {
     lockedAccess(callback) { callback(); },
     executeTransaction(callback) {
@@ -43,6 +50,7 @@ test('renameAndRelink performs a real Unicode filesystem rename', async (t) => {
     fs,
     project,
     projectItem,
+    trackItems: [trackItem],
     sourcePath,
     targetPath,
     targetName,
@@ -54,4 +62,5 @@ test('renameAndRelink performs a real Unicode filesystem rename', async (t) => {
   assert.deepEqual(await fs.readFile(targetPath), contents);
   assert.equal(projectItem.mediaPath, targetPath);
   assert.equal(projectItem.name, targetName);
+  assert.equal(trackItem.name, targetName);
 });

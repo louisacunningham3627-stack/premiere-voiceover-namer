@@ -37,6 +37,35 @@ test('captureFolderFromMediaPath returns the native parent directory', () => {
     policy.captureFolderFromMediaPath('D:/Captures/take.wav'),
     'D:/Captures',
   );
+  assert.equal(policy.captureFolderFromMediaPath('/take.wav'), '/');
+});
+
+test('macOS paths remain case-sensitive while UNC paths remain case-insensitive', () => {
+  assert.equal(policy.isAbsoluteNativePath('/'), true);
+  assert.equal(policy.isAbsoluteNativePath('/Users/editor/Captures'), true);
+  assert.equal(policy.isAbsoluteNativePath('\\\\SERVER\\Share\\Captures'), true);
+  assert.equal(policy.isAbsoluteNativePath('relative/Captures'), false);
+  assert.equal(
+    policy.isTrustedCapturePath(trustedOptions('/Users/editor/Captures/音频 1.wav', {
+      learnedFolder: '/Users/editor/Captures',
+      projectPath: '/Users/editor/Project.prproj',
+    })),
+    true,
+  );
+  assert.equal(
+    policy.isTrustedCapturePath(trustedOptions('/users/editor/Captures/音频 2.wav', {
+      learnedFolder: '/Users/editor/Captures',
+      projectPath: '/Users/editor/Project.prproj',
+    })),
+    false,
+  );
+  assert.equal(
+    policy.isTrustedCapturePath(trustedOptions('\\\\server\\share\\Captures\\音频 3.wav', {
+      learnedFolder: '//SERVER/share/Captures',
+      projectPath: '\\\\server\\share\\Project.prproj',
+    })),
+    true,
+  );
 });
 
 test('project identity combines normalized path and guid so copied projects stay distinct', () => {
@@ -179,6 +208,23 @@ test('transient filesystem errors are retryable and receive a backoff', () => {
   const laterDelay = policy.retryDelayMs(2, true);
   assert.ok(firstDelay > 0);
   assert.ok(laterDelay >= firstDelay);
+});
+
+test('a retryable Premiere file lock stays in waiting state instead of becoming a panel error', () => {
+  const mainSource = fs.readFileSync('src/main.js', 'utf8');
+  const start = mainSource.indexOf('async function advancePending');
+  const end = mainSource.indexOf('async function scanTick', start);
+  assert.ok(start >= 0 && end > start, 'advancePending body is missing');
+  const body = mainSource.slice(start, end);
+  const lockBranchStart = body.indexOf('if (retryableLock) {');
+  const nonLockErrorStart = body.indexOf('if (!pending.errorReported)', lockBranchStart);
+  assert.ok(lockBranchStart >= 0 && nonLockErrorStart > lockBranchStart);
+  const lockBranch = body.slice(lockBranchStart, nonLockErrorStart);
+
+  assert.match(lockBranch, /addLog\("warn"/);
+  assert.match(lockBranch, /释放后会自动继续/);
+  assert.match(lockBranch, /return;/);
+  assert.doesNotMatch(lockBranch, /setJobError|sessionMetrics\.errors|pending\.errorReported/);
 });
 
 test('cancellation is not classified as a filesystem retry', () => {

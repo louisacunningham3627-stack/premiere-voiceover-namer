@@ -232,21 +232,61 @@
     var index = Math.max(winIndex, posixIndex);
     var separator = winIndex > posixIndex ? "\\" : "/";
     return {
-      dir: index >= 0 ? text.slice(0, index) : "",
+      dir: index === 0 && separator === "/" ? "/" : (index >= 0 ? text.slice(0, index) : ""),
       base: index >= 0 ? text.slice(index + 1) : text,
       separator: separator,
     };
   }
 
   function joinNativePath(directory, fileName, separator) {
-    var dir = String(directory || "").replace(/[\\/]+$/g, "");
+    var rawDirectory = String(directory || "");
+    var isRootDirectory = rawDirectory.length > 0 && rawDirectory.split("").every(function (character) {
+      return character === "/";
+    });
+    var dir = isRootDirectory ? "/" : rawDirectory.replace(/[\\/]+$/g, "");
     if (!dir) return String(fileName || "");
+    if (dir === "/") return "/" + String(fileName || "");
     return dir + (separator || (dir.indexOf("\\") >= 0 ? "\\" : "/")) + fileName;
   }
 
+  function nativePathPlatform(nativePath) {
+    var text = String(nativePath || "");
+    if (/^[a-z]:[\\/]/i.test(text) || /^\\\\/.test(text)) return "windows";
+    if (text.indexOf("//") === 0) return "windows";
+    if (/^\//.test(text)) return "posix";
+    return "relative";
+  }
+
+  function normalizePathSegments(text, absolute, isUnc) {
+    var segments = String(text || "").split("/");
+    var output = [];
+    for (var index = 0; index < segments.length; index += 1) {
+      var segment = segments[index];
+      if (!segment || segment === ".") continue;
+      if (segment === "..") {
+        var protectsDrive = output.length === 1 && /^[a-z]:$/i.test(output[0]);
+        if (output.length && output[output.length - 1] !== ".." && !protectsDrive) {
+          output.pop();
+        } else if (!absolute) {
+          output.push("..");
+        }
+        continue;
+      }
+      output.push(segment);
+    }
+    if (isUnc) return "//" + output.join("/");
+    if (absolute) return "/" + output.join("/");
+    return output.join("/");
+  }
+
   function normalizePathForComparison(nativePath) {
-    var text = String(nativePath || "").replace(/\\/g, "/").replace(/\/+$/g, "");
-    if (/^[a-z]:\//i.test(text) || text.indexOf("//") === 0) text = text.toLowerCase();
+    var raw = String(nativePath || "").replace(/\\/g, "/");
+    var platform = nativePathPlatform(nativePath);
+    var isUnc = platform === "windows" && raw.indexOf("//") === 0;
+    var isAbsolute = platform !== "relative";
+    var text = normalizePathSegments(raw, isAbsolute, isUnc);
+    if (platform === "windows" && !isUnc) text = text.slice(1);
+    if (platform === "windows") text = text.toLowerCase();
     return text;
   }
 
@@ -257,7 +297,9 @@
   function isPathInside(nativePath, directory) {
     var path = normalizePathForComparison(nativePath);
     var root = normalizePathForComparison(directory);
-    return !!root && (path === root || path.indexOf(root + "/") === 0);
+    if (!root) return false;
+    if (root === "/") return path.indexOf("/") === 0;
+    return path === root || path.indexOf(root + "/") === 0;
   }
 
   function isWaveFile(nativePath) {
@@ -278,6 +320,7 @@
     parseManagedName: parseManagedName,
     splitNativePath: splitNativePath,
     joinNativePath: joinNativePath,
+    nativePathPlatform: nativePathPlatform,
     normalizePathForComparison: normalizePathForComparison,
     sameNativePath: sameNativePath,
     isPathInside: isPathInside,

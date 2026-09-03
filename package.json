@@ -1,6 +1,6 @@
 {
   "name": "premiere-voiceover-namer",
-  "version": "0.3.0",
+  "version": "0.3.2",
   "private": true,
   "description": "为 Premiere Pro 原生画外音录音生成项目级唯一文件名的 UXP 插件",
   "type": "commonjs",
@@ -11,6 +11,11 @@
     "preview:panel": "node scripts/preview-panel.mjs",
     "install:user": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-user-plugin.ps1",
     "uninstall:user": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/uninstall-user-plugin.ps1",
+    "install:user:macos": "bash scripts/install-user-plugin-macos.sh",
+    "uninstall:user:macos": "bash scripts/uninstall-user-plugin-macos.sh",
+    "package:macos": "node scripts/package-macos.mjs",
+    "verify:macos": "node scripts/verify-macos-package.mjs",
+    "check:macos": "npm run check && npm run package:macos && npm run verify:macos",
     "check": "npm run test && npm run build && node scripts/verify-build.mjs"
   },
   "engines": {

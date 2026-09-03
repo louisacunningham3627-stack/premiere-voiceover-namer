@@ -100,14 +100,246 @@
     } catch (error) {}
   }
 
-  function setProjectItemName(project, projectItem, name, undoLabel) {
+  function uniqueTrackItems(trackItems) {
+    var unique = [];
+    var seen = new Set();
+    (trackItems || []).forEach(function (trackItem) {
+      if (!trackItem || seen.has(trackItem)) return;
+      seen.add(trackItem);
+      unique.push(trackItem);
+    });
+    return unique;
+  }
+
+  async function captureTrackItemNames(trackItems) {
+    var unique = uniqueTrackItems(trackItems);
+    if (!unique.length) throw new Error("未找到可同步名称的 Premiere 时间线音频片段");
+
+    var snapshots = [];
+    for (var index = 0; index < unique.length; index += 1) {
+      var trackItem = unique[index];
+      if (typeof trackItem.getName !== "function" || typeof trackItem.createSetNameAction !== "function") {
+        throw new Error("Premiere 时间线片段不支持名称读取或改名 API");
+      }
+      var originalName;
+      try {
+        originalName = await trackItem.getName();
+      } catch (error) {
+        throw new Error("无法读取 Premiere 时间线片段名称: " + (error.message || error));
+      }
+      if (originalName === undefined || originalName === null) {
+        throw new Error("Premiere 时间线片段返回了无效名称");
+      }
+      snapshots.push({
+        trackItem: trackItem,
+        originalName: String(originalName),
+      });
+    }
+    return snapshots;
+  }
+
+  function addRequiredNameAction(compoundAction, owner, name, description) {
+    var action;
+    try {
+      action = owner.createSetNameAction(name);
+    } catch (error) {
+      throw new Error(description + "改名动作创建失败: " + (error.message || error));
+    }
+    if (!action) throw new Error(description + "改名动作不可用");
+    var added;
+    try {
+      added = compoundAction.addAction(action);
+    } catch (error) {
+      throw new Error(description + "改名动作加入事务失败: " + (error.message || error));
+    }
+    if (added === false) throw new Error(description + "改名动作加入事务失败");
+  }
+
+  function ensureNameTransactionSupport(project, projectItem) {
+    if (!project || typeof project.lockedAccess !== "function" || typeof project.executeTransaction !== "function") {
+      throw new Error("Premiere 项目不支持名称事务 API");
+    }
+    if (!projectItem || typeof projectItem.createSetNameAction !== "function") {
+      throw new Error("Premiere 素材不支持改名 API");
+    }
+  }
+
+  function setProjectAndTrackItemNames(project, projectItem, projectItemName, trackItemNames, undoLabel) {
+    ensureNameTransactionSupport(project, projectItem);
+
     var success = false;
     project.lockedAccess(function () {
       success = project.executeTransaction(function (compoundAction) {
-        compoundAction.addAction(projectItem.createSetNameAction(name));
+        if (!compoundAction || typeof compoundAction.addAction !== "function") {
+          throw new Error("Premiere 名称事务不可用");
+        }
+        if (projectItemName !== undefined && projectItemName !== null) {
+          addRequiredNameAction(compoundAction, projectItem, projectItemName, "素材");
+        }
+        (trackItemNames || []).forEach(function (entry) {
+          if (!entry || !entry.trackItem || typeof entry.trackItem.createSetNameAction !== "function") {
+            throw new Error("Premiere 时间线片段不支持改名 API");
+          }
+          addRequiredNameAction(compoundAction, entry.trackItem, entry.name, "时间线片段");
+        });
       }, undoLabel || "Rename captured audio");
     });
     return success;
+  }
+
+  function setProjectItemName(project, projectItem, name, undoLabel) {
+    return setProjectAndTrackItemNames(project, projectItem, name, [], undoLabel);
+  }
+
+  async function waitForVerifiedTrackItemNames(trackItemNames, delay) {
+    for (var attempt = 0; attempt < 8; attempt += 1) {
+      var allMatch = true;
+      for (var index = 0; index < (trackItemNames || []).length; index += 1) {
+        var entry = trackItemNames[index];
+        try {
+          var actualName = await entry.trackItem.getName();
+          if (String(actualName) !== String(entry.name)) allMatch = false;
+        } catch (error) {
+          allMatch = false;
+        }
+      }
+      if (allMatch) return true;
+      if (attempt < 7) await delay(80);
+    }
+    return false;
+  }
+
+  async function restoreNames(project, projectItem, originalName, trackItemNames, delay) {
+    var warnings = [];
+    var projectItemRestoreName = null;
+    var trackItemRestoreNames = [];
+
+    try {
+      if (String(projectItem.name || "") !== String(originalName)) {
+        projectItemRestoreName = originalName;
+      }
+    } catch (error) {
+      projectItemRestoreName = originalName;
+    }
+
+    for (var index = 0; index < (trackItemNames || []).length; index += 1) {
+      var entry = trackItemNames[index];
+      try {
+        var currentName = await entry.trackItem.getName();
+        if (String(currentName) !== String(entry.originalName)) {
+          trackItemRestoreNames.push({ trackItem: entry.trackItem, name: entry.originalName });
+        }
+      } catch (error) {
+        trackItemRestoreNames.push({ trackItem: entry.trackItem, name: entry.originalName });
+      }
+    }
+
+    if (projectItemRestoreName === null && !trackItemRestoreNames.length) return warnings;
+
+    try {
+      if (!setProjectAndTrackItemNames(
+        project,
+        projectItem,
+        projectItemRestoreName,
+        trackItemRestoreNames,
+        "恢复录音素材和时间线片段名"
+      )) {
+        warnings.push("恢复素材名和时间线片段名返回失败");
+        return warnings;
+      }
+      if (projectItemRestoreName !== null && !(await waitForVerifiedName(projectItem, originalName, delay))) {
+        warnings.push("恢复素材名后验证失败");
+      }
+      var expectedTrackItemNames = (trackItemNames || []).map(function (entry) {
+        return { trackItem: entry.trackItem, name: entry.originalName };
+      });
+      if (!(await waitForVerifiedTrackItemNames(expectedTrackItemNames, delay))) {
+        warnings.push("恢复时间线片段名后验证失败");
+      }
+    } catch (error) {
+      warnings.push("恢复素材名和时间线片段名失败: " + (error.message || error));
+    }
+
+    return warnings;
+  }
+
+  async function synchronizeNames(options) {
+    var project = options.project;
+    var projectItem = options.projectItem;
+    var targetName = String(options.targetName || "");
+    var delay = options.delay || wait;
+    var originalName = String(projectItem.name || "");
+    var trackItemNames = [];
+
+    try {
+      if (!targetName) throw new Error("缺少要同步的录音名称");
+      await validateContext(options.validate);
+      ensureNameTransactionSupport(project, projectItem);
+      if (options.expectedMediaPath && typeof options.samePath === "function") {
+        var currentMediaPath = await projectItem.getMediaFilePath();
+        if (!options.samePath(currentMediaPath, options.expectedMediaPath)) {
+          throw new Error("Premiere 素材已不再指向待核验的媒体路径");
+        }
+      }
+      trackItemNames = await captureTrackItemNames(options.trackItems);
+
+      var projectItemTargetName = originalName === targetName ? null : targetName;
+      var changedTrackItemNames = trackItemNames.filter(function (entry) {
+        return entry.originalName !== targetName;
+      }).map(function (entry) {
+        return { trackItem: entry.trackItem, name: targetName };
+      });
+      if (projectItemTargetName === null && !changedTrackItemNames.length) {
+        return {
+          changed: false,
+          targetName: targetName,
+          originalName: originalName,
+        };
+      }
+
+      await validateContext(options.validate);
+      if (!setProjectAndTrackItemNames(
+        project,
+        projectItem,
+        projectItemTargetName,
+        changedTrackItemNames,
+        "修复录音素材和时间线片段名"
+      )) {
+        throw new Error("Premiere 素材和时间线片段名称事务返回失败");
+      }
+
+      if (!(await waitForVerifiedName(projectItem, targetName, delay))) {
+        throw new Error("Premiere 素材名验证失败");
+      }
+      var targetTrackItemNames = trackItemNames.map(function (entry) {
+        return { trackItem: entry.trackItem, name: targetName };
+      });
+      if (!(await waitForVerifiedTrackItemNames(targetTrackItemNames, delay))) {
+        throw new Error("Premiere 时间线片段名验证失败");
+      }
+      await validateContext(options.validate);
+      if (options.expectedMediaPath && typeof options.samePath === "function") {
+        var verifiedMediaPath = await projectItem.getMediaFilePath();
+        if (!options.samePath(verifiedMediaPath, options.expectedMediaPath)) {
+          throw new Error("名称同步期间 Premiere 素材路径发生变化");
+        }
+      }
+
+      return {
+        changed: true,
+        targetName: targetName,
+        originalName: originalName,
+      };
+    } catch (error) {
+      var rollbackWarnings = trackItemNames.length
+        ? await restoreNames(project, projectItem, originalName, trackItemNames, delay)
+        : [];
+      var wrapped = new Error(error && error.message ? error.message : String(error));
+      wrapped.cause = error;
+      if (error && error.code) wrapped.code = error.code;
+      wrapped.rollbackWarnings = rollbackWarnings;
+      throw wrapped;
+    }
   }
 
   async function bestEffortRollback(context) {
@@ -138,7 +370,7 @@
     }
 
     var recoveryPath = preferTarget ? context.targetPath : sourceExists ? context.sourcePath : targetExists ? context.targetPath : "";
-    var recoveryName = recoveryPath === context.sourcePath ? context.originalName : context.targetName;
+    var recoveryName = recoveryPath === context.targetPath ? context.targetName : context.originalName;
     if (recoveryPath === context.targetPath) {
       warnings.push("旧文件名未恢复，保留新文件并维持新路径");
     }
@@ -167,18 +399,41 @@
       if (!linkRecovered) warnings.push("恢复媒体路径后验证失败");
 
       try {
-        if (String(context.projectItem.name || "") !== String(recoveryName)) {
-          if (!setProjectItemName(context.project, context.projectItem, recoveryName, "Restore captured audio name")) {
-            warnings.push("恢复素材名返回失败");
-          } else if (!(await waitForVerifiedName(context.projectItem, recoveryName, context.delay))) {
-            warnings.push("恢复素材名后验证失败");
+        var trackItemRestoreNames = (context.trackItemNames || []).map(function (entry) {
+          return { trackItem: entry.trackItem, name: entry.originalName };
+        });
+        var namesNeedRestore = String(context.projectItem.name || "") !== String(recoveryName);
+        for (var nameIndex = 0; nameIndex < trackItemRestoreNames.length; nameIndex += 1) {
+          try {
+            var currentTrackItemName = await trackItemRestoreNames[nameIndex].trackItem.getName();
+            if (String(currentTrackItemName) !== String(trackItemRestoreNames[nameIndex].name)) namesNeedRestore = true;
+          } catch (error) {
+            namesNeedRestore = true;
+          }
+        }
+        if (namesNeedRestore) {
+          if (!setProjectAndTrackItemNames(
+            context.project,
+            context.projectItem,
+            recoveryName,
+            trackItemRestoreNames,
+            "Restore captured audio names"
+          )) {
+            warnings.push("恢复素材名和时间线片段名返回失败");
+          } else {
+            if (!(await waitForVerifiedName(context.projectItem, recoveryName, context.delay))) {
+              warnings.push("恢复素材名后验证失败");
+            }
+            if (!(await waitForVerifiedTrackItemNames(trackItemRestoreNames, context.delay))) {
+              warnings.push("恢复时间线片段名后验证失败");
+            }
           }
         }
       } catch (error) {
-        warnings.push("恢复素材名失败: " + error.message);
+        warnings.push("恢复素材名和时间线片段名失败: " + error.message);
       }
     } else {
-      warnings.push("源文件和目标文件都不存在，未修改媒体路径");
+      warnings.push("源文件和目标文件都不存在，未修改媒体路径、素材名或时间线片段名");
     }
 
     return warnings;
@@ -207,10 +462,13 @@
       fileRenamed: false,
       linkChanged: false,
       itemNameChanged: false,
+      trackItemNames: [],
     };
 
     try {
       await validateContext(options.validate);
+      ensureNameTransactionSupport(project, projectItem);
+      context.trackItemNames = await captureTrackItemNames(options.trackItems);
       var currentMediaPath = await projectItem.getMediaFilePath();
       if (!samePath(currentMediaPath, sourcePath)) {
         throw new Error("Premiere 素材已不再指向候选源路径");
@@ -239,12 +497,18 @@
       }
 
       await validateContext(options.validate);
-      if (!setProjectItemName(project, projectItem, targetName, "同步录音素材名")) {
-        throw new Error("Premiere 素材名事务返回失败");
+      var targetTrackItemNames = context.trackItemNames.map(function (entry) {
+        return { trackItem: entry.trackItem, name: targetName };
+      });
+      if (!setProjectAndTrackItemNames(project, projectItem, targetName, targetTrackItemNames, "同步录音素材和时间线片段名")) {
+        throw new Error("Premiere 素材和时间线片段名称事务返回失败");
       }
       context.itemNameChanged = true;
       if (!(await waitForVerifiedName(projectItem, targetName, delay))) {
         throw new Error("Premiere 素材名验证失败");
+      }
+      if (!(await waitForVerifiedTrackItemNames(targetTrackItemNames, delay))) {
+        throw new Error("Premiere 时间线片段名验证失败");
       }
 
       await validateContext(options.validate);
@@ -269,6 +533,7 @@
     exists: exists,
     isTargetConflict: isTargetConflict,
     renameAndRelink: renameAndRelink,
+    synchronizeNames: synchronizeNames,
     setProjectItemName: setProjectItemName,
   };
 });

@@ -1,8 +1,11 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 const { once } = require('node:events');
+const { readFileSync } = require('node:fs');
+const path = require('node:path');
 
 const panelState = require('../src/panel-state.js');
+const panelStyles = readFileSync(path.join(__dirname, '..', 'plugin', 'styles.css'), 'utf8');
 
 let preview;
 test.before(async () => {
@@ -62,6 +65,58 @@ test('panel preview explains the native microphone zero-setup route', async () =
   assert.match(html, /id="guideProject"/);
   assert.match(html, /id="guideFolder"/);
   assert.match(html, /id="guideListen"/);
+});
+
+test('panel puts the real processing result before secondary guidance and connection details', async () => {
+  const html = await preview.renderIndex('processing', 'relink');
+  const stateIndex = html.indexOf('class="state-band"');
+  const pipelineIndex = html.indexOf('class="pipeline-band"');
+  const guideIndex = html.indexOf('class="guide-band"');
+  const readinessIndex = html.indexOf('class="readiness-band"');
+
+  assert.ok(stateIndex >= 0);
+  assert.ok(pipelineIndex > stateIndex);
+  assert.ok(guideIndex > pipelineIndex);
+  assert.ok(readinessIndex > guideIndex);
+  assert.match(html, /链接并改片段/);
+});
+
+test('panel owns a definite visible vertical scrollport inside the UXP host', () => {
+  assert.match(
+    panelStyles,
+    /html,\s*body\s*\{[^}]*height:\s*100%;[^}]*min-height:\s*0;[^}]*overflow:\s*hidden;/s,
+  );
+  assert.match(
+    panelStyles,
+    /\.app-shell\s*\{[^}]*height:\s*100%;[^}]*min-height:\s*0;[^}]*display:\s*block;[^}]*overflow-x:\s*hidden;[^}]*overflow-y:\s*scroll;/s,
+  );
+  assert.match(panelStyles, /\.app-shell::\-webkit-scrollbar\s*\{[^}]*width:\s*10px;/s);
+  assert.match(panelStyles, /\.app-shell::\-webkit-scrollbar-thumb\s*\{/);
+});
+
+test('panel sections stay in document flow instead of shrinking into each other', () => {
+  const shellRule = panelStyles.match(/\.app-shell\s*\{([^}]*)\}/s);
+  assert.ok(shellRule, 'app shell rule is missing');
+  assert.match(shellRule[1], /display:\s*block/);
+  assert.doesNotMatch(shellRule[1], /display:\s*flex|flex-direction|flex-shrink/);
+});
+
+test('active panel states collapse repeated guidance and readiness details', () => {
+  for (const state of ['ready', 'starting', 'listening', 'processing', 'scanning']) {
+    assert.match(panelStyles, new RegExp(`\\.app-shell\\[data-panel-state="${state}"\\] \\.guide-steps`));
+    assert.match(panelStyles, new RegExp(`\\.app-shell\\[data-panel-state="${state}"\\] \\.readiness-list`));
+  }
+
+  for (const state of ['disconnected', 'unsaved', 'no-sequence', 'paused', 'error']) {
+    assert.doesNotMatch(panelStyles, new RegExp(`\\.app-shell\\[data-panel-state="${state}"\\] \\.guide-steps`));
+    assert.doesNotMatch(panelStyles, new RegExp(`\\.app-shell\\[data-panel-state="${state}"\\] \\.readiness-list`));
+  }
+});
+
+test('activity history uses the panel scrollport instead of a nested scrollbar', () => {
+  assert.match(panelStyles, /\.activity-list\s*\{[^}]*overflow:\s*visible;/s);
+  assert.doesNotMatch(panelStyles, /\.activity-list\s*\{[^}]*overflow-y:\s*auto;/s);
+  assert.doesNotMatch(panelStyles, /\.activity-list\s*\{[^}]*max-height:/s);
 });
 
 test('production panel uses native controls and the flex/block subset', async () => {

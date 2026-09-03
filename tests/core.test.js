@@ -38,12 +38,29 @@ test('path and filename helpers respect Windows and POSIX boundaries', () => {
   assert.deepEqual(core.splitNativePath('/captures/take.wav'), {
     dir: '/captures', base: 'take.wav', separator: '/',
   });
+  assert.deepEqual(core.splitNativePath('/take.wav'), {
+    dir: '/', base: 'take.wav', separator: '/',
+  });
   assert.equal(core.joinNativePath('C:\\Captures\\', 'take.wav'), 'C:\\Captures\\take.wav');
   assert.equal(core.joinNativePath('/captures/', 'take.wav'), '/captures/take.wav');
+  assert.equal(core.joinNativePath('/', 'take.wav'), '/take.wav');
   assert.equal(core.joinNativePath('', 'take.wav'), 'take.wav');
 
   assert.equal(core.sameNativePath('C:\\CAPTURES\\take.wav', 'c:/captures/take.wav'), true);
   assert.equal(core.sameNativePath('/Captures/take.wav', '/captures/take.wav'), false);
+  assert.equal(core.nativePathPlatform('/'), 'posix');
+  assert.equal(core.normalizePathForComparison('/'), '/');
+  assert.equal(core.normalizePathForComparison('/Users/Me/Captures/'), '/Users/Me/Captures');
+  assert.equal(core.sameNativePath('/Users/Me/Captures/take.wav', '/users/me/captures/take.wav'), false);
+  assert.equal(core.isPathInside('/Users/Me/Captures/take.wav', '/'), true);
+  assert.equal(core.isPathInside('/Users/Me/Captures/take.wav', '/Users/Me'), true);
+  assert.equal(core.isPathInside('/Users/Media/take.wav', '/Users/Me'), false);
+  assert.equal(core.normalizePathForComparison('/Users/Me/./Captures/../take.wav'), '/Users/Me/take.wav');
+  assert.equal(core.isPathInside('/Users/Me/../../etc/take.wav', '/Users/Me'), false);
+  assert.equal(core.isPathInside('C:\\Captures\\..\\Other\\take.wav', 'C:\\Captures'), false);
+  assert.equal(core.sameNativePath('\\\\SERVER\\Share\\Take.wav', '//server/share/take.wav'), true);
+  assert.equal(core.isPathInside('\\\\SERVER\\Share\\Nested\\Take.wav', '\\\\server\\share'), true);
+  assert.equal(core.isPathInside('\\\\SERVER\\Share2\\Take.wav', '\\\\server\\share'), false);
   assert.equal(core.isPathInside('C:\\Captures\\nested\\take.wav', 'c:\\captures'), true);
   assert.equal(core.isPathInside('C:\\Captures2\\take.wav', 'C:\\Captures'), false);
   assert.equal(core.isPathInside('C:\\Capture', 'C:\\Captures'), false);

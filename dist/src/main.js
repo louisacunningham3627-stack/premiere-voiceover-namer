@@ -40,6 +40,7 @@
   var pendingFiles = new Map();
   var watchedFolderBaseline = new Set();
   var unmatchedFolderFiles = new Map();
+  var normalizedNameChecks = new Set();
   var eventScanRequested = false;
   var trackListeners = [];
   var globalImportListenerAttached = false;
@@ -188,7 +189,7 @@
       found: "已发现新 WAV",
       stable: "等待文件写入完成",
       rename: "正在重命名磁盘文件",
-      relink: "正在更新 Premiere 链接",
+      relink: "正在重链接并同步时间线片段名",
       complete: "最近一条已完成",
       error: "处理失败",
     };
@@ -202,7 +203,7 @@
       element("pipelineRename"),
       element("pipelineRelink"),
     ];
-    var labels = ["发现 WAV", "等待稳定", "重命名", "重链接"];
+    var labels = ["发现 WAV", "等待稳定", "重命名", "重链接并同步时间线片段名"];
     var statusLabels = { waiting: "等待", active: "正在进行", done: "已完成", error: "失败" };
     var pipeline = PanelState.derivePipeline(currentJob || {});
 
@@ -360,7 +361,10 @@
         view.busy || !context || !projectIsSaved() || !context.sequence || !projectState;
     }
     if (chooseFolderButton) chooseFolderButton.disabled = monitoring || view.busy || !context || !projectIsSaved();
-    if (refreshButton) refreshButton.disabled = monitoring || view.busy;
+    if (refreshButton) {
+      refreshButton.textContent = monitoring ? "重新检查" : "刷新项目";
+      refreshButton.disabled = view.busy || (monitoring && !panelErrorMessage);
+    }
 
     setText("processedCount", String(sessionMetrics.processed));
     setText("pendingCount", String(pendingFiles.size + unmatchedFolderFiles.size));
@@ -647,7 +651,8 @@
 
       for (var itemIndex = 0; itemIndex < trackItems.length; itemIndex += 1) {
         try {
-          var rawItem = await trackItems[itemIndex].getProjectItem();
+          var trackItem = trackItems[itemIndex];
+          var rawItem = await trackItem.getProjectItem();
           var clipItem = ppro.ClipProjectItem.cast(rawItem);
           if (!clipItem) continue;
           var projectItemId = "";
@@ -666,6 +671,7 @@
             projectItem: clipItem,
             projectItemIdentity: rawItem,
             projectItemId: projectItemId,
+            trackItems: [trackItem],
             project: activeContext.project,
             projectIdentity: activeContext.identity,
             projectName: activeContext.project.name,
@@ -970,6 +976,7 @@
           resetWatchFolderValidation();
         }
 
+        normalizedNameChecks.clear();
         var snapshot = await collectTrackMedia(context);
         var folderFiles = watchFolderValid ? await listWatchedWavePaths() : [];
         armedAtMs = requestedArmTime;
@@ -1017,6 +1024,7 @@
     pendingFiles.clear();
     watchedFolderBaseline.clear();
     unmatchedFolderFiles.clear();
+    normalizedNameChecks.clear();
     eventScanRequested = false;
     activeSequenceIdentity = "";
     armedAtMs = 0;
@@ -1141,6 +1149,7 @@
             fs: fs,
             project: candidateProject,
             projectItem: candidate.projectItem,
+            trackItems: candidate.trackItems,
             sourcePath: candidate.mediaPath,
             targetPath: plan.targetPath,
             targetName: plan.targetName,
@@ -1165,6 +1174,8 @@
           throw error;
         }
       }
+
+      normalizedNameChecks.add(Core.normalizePathForComparison(plan.targetPath));
 
       var learnedFolder = MonitoringPolicy.captureFolderFromMediaPath(candidate.mediaPath);
       var nextState = State.commitRecording(operationState, {
@@ -1204,13 +1215,37 @@
       if (learnedFolder && !Core.sameNativePath(operationState.watchFolder, learnedFolder)) {
         addLog("ok", "已自动识别录音目录：" + learnedFolder);
       }
-      addLog("ok", (plan.collisionRetries ? "重名避让 " + plan.collisionRetries + " 次 · " : "") + plan.targetName);
+      addLog(
+        "ok",
+        (plan.collisionRetries ? "重名避让 " + plan.collisionRetries + " 次 · " : "")
+          + "已重链接并同步时间线片段名 · "
+          + plan.targetName
+      );
       updateControls();
       return plan;
     } catch (error) {
       if (!isCancellation(error)) setJobError(error, candidate);
       throw error;
     }
+  }
+
+  async function synchronizeNormalizedRecordingNames(candidate) {
+    var targetName = Core.fileNameFromPath(candidate.mediaPath);
+    var result = await Transaction.synchronizeNames({
+      project: candidate.project || context.project,
+      projectItem: candidate.projectItem,
+      trackItems: candidate.trackItems,
+      targetName: targetName,
+      expectedMediaPath: candidate.mediaPath,
+      samePath: Core.sameNativePath,
+      validate: function () {
+        return ensureActiveMediaContext(candidate.projectIdentity, candidate.sequenceIdentity);
+      },
+    });
+    if (result.changed) {
+      addLog("ok", targetName + "：已补齐 Premiere 素材名和时间线片段名");
+    }
+    return result;
   }
 
   async function advancePending(candidate, allEntries, guard) {
@@ -1222,6 +1257,7 @@
       signature: "",
       stablePolls: 0,
       lockRetries: 0,
+      lockWarningReported: false,
       failureCount: 0,
       nextAttemptAt: 0,
       warnedLongRecording: false,
@@ -1277,13 +1313,19 @@
       pending.nextAttemptAt = Date.now() + MonitoringPolicy.retryDelayMs(pending.failureCount, retryableLock);
       pendingFiles.set(key, pending);
 
-      if (retryableLock && pending.lockRetries < LOCK_WARNING_RETRIES) return;
-      if (!pending.errorReported || (retryableLock && pending.lockRetries === LOCK_WARNING_RETRIES)) {
+      if (retryableLock) {
+        if (!pending.lockWarningReported && pending.lockRetries >= LOCK_WARNING_RETRIES) {
+          pending.lockWarningReported = true;
+          addLog("warn", Core.fileNameFromPath(candidate.mediaPath) + "：Premiere 仍在占用录音文件，释放后会自动继续");
+        }
+        return;
+      }
+      if (!pending.errorReported) {
         pending.errorReported = true;
         setJobError(error, candidate);
         sessionMetrics.errors += 1;
         var rollback = error.rollbackWarnings && error.rollbackWarnings.length ? "；回滚提示：" + error.rollbackWarnings.join("；") : "";
-        addLog(retryableLock ? "warn" : "error", Core.fileNameFromPath(candidate.mediaPath) + "：" + (error.message || error) + "；将自动重试" + rollback);
+        addLog("error", Core.fileNameFromPath(candidate.mediaPath) + "：" + (error.message || error) + "；将自动重试" + rollback);
       }
     }
   }
@@ -1356,6 +1398,7 @@
         if (!monitoring || !monitorGuard.isCurrent(generation)) throw cancellationError("监听已停止");
         if (sequenceChanged) {
           activeSequenceIdentity = snapshot.sequenceIdentity;
+          normalizedNameChecks.clear();
           seenPaths = await createInitialPathBaseline(snapshot.entries, armedAtMs);
           pendingFiles.clear();
           unmatchedFolderFiles.clear();
@@ -1378,6 +1421,26 @@
           if (isNormalizedRecording(candidate)) {
             seenPaths.add(key);
             watchedFolderBaseline.add(key);
+            if (!normalizedNameChecks.has(key)) {
+              normalizedNameChecks.add(key);
+              if (candidate.multipleProjectItems) {
+                sessionMetrics.errors += 1;
+                panelErrorMessage = "同一路径关联到多个 Premiere 素材，无法安全同步片段名";
+                addLog("error", Core.fileNameFromPath(candidate.mediaPath) + "：" + panelErrorMessage);
+              } else {
+                try {
+                  await synchronizeNormalizedRecordingNames(candidate);
+                } catch (error) {
+                  if (isCancellation(error)) throw error;
+                  sessionMetrics.errors += 1;
+                  panelErrorMessage = error.message || String(error);
+                  var nameRollback = error.rollbackWarnings && error.rollbackWarnings.length
+                    ? "；回滚提示：" + error.rollbackWarnings.join("；")
+                    : "";
+                  addLog("error", Core.fileNameFromPath(candidate.mediaPath) + "：历史名称同步失败：" + (error.message || error) + "；点击“重新检查”后可重试" + nameRollback);
+                }
+              }
+            }
             continue;
           }
           if (candidate.multipleProjectItems) {
@@ -1387,6 +1450,7 @@
               signature: "",
               stablePolls: 0,
               lockRetries: 0,
+              lockWarningReported: false,
               failureCount: 0,
               nextAttemptAt: now,
               candidate: candidate,
@@ -1423,6 +1487,7 @@
               signature: "",
               stablePolls: 0,
               lockRetries: 0,
+              lockWarningReported: false,
               failureCount: 0,
               nextAttemptAt: now,
               candidate: candidate,
@@ -1738,6 +1803,7 @@
     } else if (primaryAction === "refresh") {
       panelErrorMessage = "";
       userPaused = false;
+      normalizedNameChecks.clear();
       refreshContext();
     }
   }
@@ -1747,6 +1813,13 @@
   }
 
   function onRefreshButtonClick() {
+    normalizedNameChecks.clear();
+    if (monitoring) {
+      panelErrorMessage = "";
+      requestSoonScan();
+      updateControls();
+      return;
+    }
     refreshContext({ allowAutoStart: false });
   }
 

@@ -16,22 +16,42 @@
   ];
 
   function normalizePath(nativePath) {
-    var text = String(nativePath || "").replace(/\\/g, "/").replace(/\/+$/g, "");
-    if (/^[a-z]:\//i.test(text) || text.indexOf("//") === 0) text = text.toLowerCase();
+    var raw = String(nativePath || "").replace(/\\/g, "/");
+    var isWindows = /^[a-z]:\//i.test(raw) || raw.indexOf("//") === 0;
+    var isUnc = isWindows && raw.indexOf("//") === 0;
+    var segments = raw.split("/");
+    var output = [];
+    var absolute = isWindows || /^\//.test(raw);
+    for (var index = 0; index < segments.length; index += 1) {
+      var segment = segments[index];
+      if (!segment || segment === ".") continue;
+      if (segment === "..") {
+        var protectsDrive = output.length === 1 && /^[a-z]:$/i.test(output[0]);
+        if (output.length && output[output.length - 1] !== ".." && !protectsDrive) output.pop();
+        else if (!absolute) output.push("..");
+        continue;
+      }
+      output.push(segment);
+    }
+    var text = isUnc ? "//" + output.join("/") : (absolute ? "/" + output.join("/") : output.join("/"));
+    if (isWindows && !isUnc) text = text.slice(1);
+    if (isWindows) text = text.toLowerCase();
     return text;
   }
 
   function pathInside(nativePath, directory) {
     var path = normalizePath(nativePath);
     var root = normalizePath(directory);
-    return !!root && (path === root || path.indexOf(root + "/") === 0);
+    if (!root) return false;
+    if (root === "/") return path.indexOf("/") === 0;
+    return path === root || path.indexOf(root + "/") === 0;
   }
 
   function splitNativePath(nativePath) {
     var text = String(nativePath || "");
     var slash = Math.max(text.lastIndexOf("\\"), text.lastIndexOf("/"));
     return {
-      dir: slash >= 0 ? text.slice(0, slash) : "",
+      dir: slash === 0 && text.charAt(0) === "/" ? "/" : (slash >= 0 ? text.slice(0, slash) : ""),
       base: slash >= 0 ? text.slice(slash + 1) : text,
     };
   }
@@ -55,11 +75,16 @@
 
   function isAbsoluteNativePath(nativePath) {
     var value = String(nativePath || "").trim();
-    return /^[a-z]:[\\/]/i.test(value) || /^\\\\[^\\]+\\[^\\]+/.test(value) || /^\//.test(value);
+    return /^[a-z]:[\\/]/i.test(value)
+      || /^\\\\[^\\]+\\[^\\]+/.test(value)
+      || /^\/\/[^/]+\/[^/]+/.test(value)
+      || /^\//.test(value);
   }
 
   function hasCaptureMarker(nativePath) {
-    var normalized = normalizePath(nativePath);
+    // Marker spelling is supplied by Premiere and is not a filesystem path
+    // identity. Compare it case-insensitively on both Windows and macOS.
+    var normalized = normalizePath(nativePath).toLowerCase();
     return CAPTURE_MARKERS.some(function (marker) {
       return normalized.split("/").indexOf(marker) >= 0;
     });
