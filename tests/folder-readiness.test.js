@@ -43,3 +43,62 @@ test('folder readiness fails closed when filesystem metadata cannot identify a d
   assert.equal(result.valid, false);
   assert.match(result.problem, /无法确认/);
 });
+
+test('folder readiness creates and verifies a missing project recording directory', async () => {
+  let present = false;
+  const calls = [];
+  const result = await folderReadiness.ensure({
+    async lstat(path) {
+      calls.push(['lstat', path]);
+      if (!present) {
+        const error = new Error('missing');
+        error.code = 'ENOENT';
+        throw error;
+      }
+      return { isDirectory: () => true };
+    },
+    async mkdir(path) {
+      calls.push(['mkdir', path]);
+      present = true;
+    },
+  }, 'E:\\节目\\录音');
+
+  assert.deepEqual(result, { valid: true, created: true, problem: '' });
+  assert.deepEqual(calls, [
+    ['lstat', 'E:\\节目\\录音'],
+    ['mkdir', 'E:\\节目\\录音'],
+    ['lstat', 'E:\\节目\\录音'],
+  ]);
+});
+
+test('folder readiness reuses an existing project recording directory without mkdir', async () => {
+  let mkdirCalls = 0;
+  const result = await folderReadiness.ensure({
+    async lstat() { return { isDirectory: () => true }; },
+    async mkdir() { mkdirCalls += 1; },
+  }, '/Volumes/Edit/节目/录音');
+
+  assert.deepEqual(result, { valid: true, created: false, problem: '' });
+  assert.equal(mkdirCalls, 0);
+});
+
+test('folder readiness reports a project recording directory creation failure', async () => {
+  const result = await folderReadiness.ensure({
+    async lstat() {
+      const error = new Error('missing');
+      error.code = 'ENOENT';
+      throw error;
+    },
+    async mkdir() {
+      const error = new Error('permission denied');
+      error.code = 'EACCES';
+      throw error;
+    },
+  }, 'E:\\节目\\录音');
+
+  assert.equal(result.valid, false);
+  assert.equal(result.created, false);
+  assert.match(result.problem, /无法创建工程录音目录/);
+  assert.match(result.problem, /没有写入权限/);
+  assert.doesNotMatch(result.problem, /permission denied/i);
+});

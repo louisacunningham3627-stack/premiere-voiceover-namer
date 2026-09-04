@@ -3,7 +3,7 @@
   "id": "com.hechao.premiere.voiceover-namer",
   "name": "赫朝录音命名器",
   "shortname": "录音命名器",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "main": "index.html",
   "host": {
     "app": "premierepro",

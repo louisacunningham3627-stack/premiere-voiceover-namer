@@ -1,6 +1,6 @@
 {
   "name": "premiere-voiceover-namer",
-  "version": "0.3.2",
+  "version": "0.3.3",
   "private": true,
   "description": "为 Premiere Pro 原生画外音录音生成项目级唯一文件名的 UXP 插件",
   "type": "commonjs",

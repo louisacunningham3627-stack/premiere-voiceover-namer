@@ -43,6 +43,7 @@ const requiredFiles = [
   "src/folder-readiness.js",
   "src/media-candidates.js",
   "src/monitoring-policy.js",
+  "src/sha256.js",
   "src/transaction.js",
   "src/coordination.js",
   "src/main.js",
@@ -52,7 +53,7 @@ for (const relativePath of requiredFiles) {
   assert.equal(await exists(path.join(distDirectory, relativePath)), true, `${relativePath} is missing`);
 }
 
-for (const fileName of ["core.js", "state.js", "panel-state.js", "folder-readiness.js", "media-candidates.js", "monitoring-policy.js", "transaction.js", "coordination.js", "main.js"]) {
+for (const fileName of ["core.js", "state.js", "panel-state.js", "folder-readiness.js", "media-candidates.js", "monitoring-policy.js", "sha256.js", "transaction.js", "coordination.js", "main.js"]) {
   const sourceHash = await digest(path.join(projectRoot, "src", fileName));
   const outputHash = await digest(path.join(distDirectory, "src", fileName));
   assert.equal(outputHash, sourceHash, `dist/src/${fileName} differs from source`);
@@ -69,7 +70,7 @@ const styles = await readFile(path.join(distDirectory, "styles.css"), "utf8");
 const mainSource = await readFile(path.join(distDirectory, "src", "main.js"), "utf8");
 const coreSource = await readFile(path.join(distDirectory, "src", "core.js"), "utf8");
 let previousScriptIndex = -1;
-for (const scriptPath of ["src/core.js", "src/state.js", "src/panel-state.js", "src/folder-readiness.js", "src/media-candidates.js", "src/monitoring-policy.js", "src/transaction.js", "src/coordination.js", "src/main.js"]) {
+for (const scriptPath of ["src/core.js", "src/state.js", "src/panel-state.js", "src/folder-readiness.js", "src/media-candidates.js", "src/monitoring-policy.js", "src/sha256.js", "src/transaction.js", "src/coordination.js", "src/main.js"]) {
   assert.match(html, new RegExp(`<script\\s+src=["']${scriptPath.replace(".", "\\.")}["']`));
   const scriptIndex = html.indexOf(`src="${scriptPath}"`);
   assert.ok(scriptIndex > previousScriptIndex, `${scriptPath} is loaded out of order`);

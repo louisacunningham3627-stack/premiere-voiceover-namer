@@ -45,6 +45,12 @@ test('path and filename helpers respect Windows and POSIX boundaries', () => {
   assert.equal(core.joinNativePath('/captures/', 'take.wav'), '/captures/take.wav');
   assert.equal(core.joinNativePath('/', 'take.wav'), '/take.wav');
   assert.equal(core.joinNativePath('', 'take.wav'), 'take.wav');
+  assert.equal(core.recordingDirectoryFromProjectPath('D:\\Projects\\节目.prproj'), 'D:\\Projects\\录音');
+  assert.equal(core.recordingDirectoryFromProjectPath('\\\\SERVER\\Share\\项目\\节目.prproj'), '\\\\SERVER\\Share\\项目\\录音');
+  assert.equal(core.recordingDirectoryFromProjectPath('/Volumes/Edit/项目/节目.prproj'), '/Volumes/Edit/项目/录音');
+  assert.equal(core.recordingDirectoryFromProjectPath('/节目.prproj'), '/录音');
+  assert.equal(core.recordingDirectoryFromProjectPath('relative/节目.prproj'), '');
+  assert.equal(core.recordingDirectoryFromProjectPath(''), '');
 
   assert.equal(core.sameNativePath('C:\\CAPTURES\\take.wav', 'c:/captures/take.wav'), true);
   assert.equal(core.sameNativePath('/Captures/take.wav', '/captures/take.wav'), false);

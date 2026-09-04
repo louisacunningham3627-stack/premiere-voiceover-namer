@@ -1,27 +1,106 @@
 const test = require('node:test');
 const assert = require('node:assert/strict');
 
+const sha256 = require('../src/sha256.js');
 const transaction = require('../src/transaction.js');
 
 function makeFs(initialPaths, options = {}) {
   const files = new Set(initialPaths);
+  const contents = new Map(initialPaths.map((nativePath, index) => [
+    nativePath,
+    Buffer.alloc(128, 0x40 + index),
+  ]));
   const renames = [];
+  const copies = [];
+  const unlinks = [];
+  const contentFor = (nativePath) => {
+    if (contents.has(nativePath)) return contents.get(nativePath);
+    const fallback = Buffer.alloc(128, 0x5a);
+    contents.set(nativePath, fallback);
+    return fallback;
+  };
   return {
     files,
+    contents,
     renames,
+    copies,
+    unlinks,
+    constants: { COPYFILE_EXCL: 1 },
     async lstat(path) {
-      if (!files.has(path)) throw new Error('missing: ' + path);
-      return { path };
+      if (!files.has(path)) {
+        const error = new Error('missing: ' + path);
+        error.code = 'ENOENT';
+        throw error;
+      }
+      const custom = options.statForPath ? options.statForPath(path, files) : null;
+      return {
+        path,
+        size: contentFor(path).byteLength,
+        mtimeMs: 1000,
+        birthtimeMs: 900,
+        ctimeMs: 1000,
+        ino: 'source-file',
+        ...(custom || {}),
+      };
     },
     async rename(source, target) {
       renames.push([source, target]);
-      if (options.renameError && options.renameError(source, target)) throw new Error('rename failed');
+      const renameError = options.renameError && options.renameError(source, target, files);
+      if (renameError) throw renameError instanceof Error ? renameError : new Error('rename failed');
       if (options.renameResult !== undefined) return options.renameResult;
       if (!files.has(source)) throw new Error('missing source');
       if (files.has(target)) throw new Error('target exists');
       files.delete(source);
       files.add(target);
-      if (options.afterRename) options.afterRename(source, target, files);
+      const sourceContents = contentFor(source);
+      contents.delete(source);
+      contents.set(target, sourceContents);
+      if (options.afterRename) options.afterRename(source, target, files, contents);
+      return 0;
+    },
+    async copyFile(source, target, flags) {
+      copies.push([source, target, flags]);
+      if (options.beforeCopy) options.beforeCopy(source, target, files, contents);
+      const copyError = options.copyError && options.copyError(source, target, files);
+      if (copyError) {
+        if (options.leavePartialCopy) {
+          files.add(target);
+          contents.set(target, Buffer.from(contentFor(source).subarray(0, 32)));
+        }
+        throw copyError instanceof Error ? copyError : new Error('copy failed');
+      }
+      if (!files.has(source)) throw new Error('missing source');
+      if (files.has(target) && flags === 1) {
+        const error = new Error('target exists');
+        error.code = 'EEXIST';
+        throw error;
+      }
+      files.add(target);
+      contents.set(target, Buffer.from(contentFor(source)));
+      if (options.afterCopy) options.afterCopy(source, target, files, contents);
+      return 0;
+    },
+    async readFile(path) {
+      if (!files.has(path)) {
+        const error = new Error('missing');
+        error.code = 'ENOENT';
+        throw error;
+      }
+      const bytes = contentFor(path);
+      return Uint8Array.from(bytes).buffer;
+    },
+    async unlink(path) {
+      unlinks.push(path);
+      const unlinkError = options.unlinkError && options.unlinkError(path, unlinks.length, files);
+      if (unlinkError) throw unlinkError instanceof Error ? unlinkError : new Error('unlink failed');
+      if (!files.has(path)) {
+        const error = new Error('missing');
+        error.code = 'ENOENT';
+        throw error;
+      }
+      files.delete(path);
+      contents.delete(path);
+      if (options.afterUnlink) options.afterUnlink(path, files, contents);
       return 0;
     },
   };
@@ -69,6 +148,7 @@ function makePremiere(options = {}) {
       if (options.changeError && options.changeError(path, this.changeCalls.length)) throw new Error('relink failed');
       if (options.changeResult && options.changeResult(path, this.changeCalls.length) === false) return false;
       this.mediaPath = path;
+      if (options.afterMediaPathChange) options.afterMediaPathChange(path, this.changeCalls.length);
       return true;
     },
     async refreshMedia() {
@@ -120,6 +200,11 @@ const paths = {
   target: 'C:\\Captures\\renamed.wav',
 };
 
+const crossPaths = {
+  source: 'C:\\Captures\\source.wav',
+  target: 'E:\\剪辑工程\\录音\\项目-7f3c9a2e4b1d48f0a6c1e8d2b9f04a77.wav',
+};
+
 const commonOptions = (fs, premiere, extra = {}) => ({
   fs,
   project: premiere.project,
@@ -141,6 +226,12 @@ const commonNameOptions = (premiere, extra = {}) => ({
   expectedMediaPath: paths.source,
   samePath: (left, right) => left.toLowerCase().replaceAll('\\', '/') === right.toLowerCase().replaceAll('\\', '/'),
   delay: async () => {},
+  ...extra,
+});
+
+const crossVolumeOptions = (fs, premiere, extra = {}) => commonOptions(fs, premiere, {
+  sourcePath: crossPaths.source,
+  targetPath: crossPaths.target,
   ...extra,
 });
 
@@ -169,6 +260,9 @@ test('renameAndRelink succeeds and synchronizes the media item and every timelin
     targetPath: paths.target,
     targetName: '项目-7f3c9a2e4b1d48f0a6c1e8d2b9f04a77.wav',
     originalName: '原始素材名',
+    transferMode: 'renamed',
+    sourceRetained: false,
+    cleanupWarning: '',
   });
   assert.equal(fs.files.has(paths.source), false);
   assert.equal(fs.files.has(paths.target), true);
@@ -179,6 +273,358 @@ test('renameAndRelink succeeds and synchronizes the media item and every timelin
   assert.equal(premiere.item.refreshCount, 1);
   assert.equal(premiere.project.transactionCount, 1);
   assert.deepEqual(premiere.project.actionsPerTransaction, [3]);
+});
+
+test('cross-volume transfer copies exclusively to the final project path and deletes the verified source last', async () => {
+  const fs = makeFs([crossPaths.source]);
+  const premiere = makePremiere({ mediaPath: crossPaths.source, trackOriginalNames: ['片段甲', '片段乙'] });
+
+  const result = await transaction.renameAndRelink(crossVolumeOptions(fs, premiere));
+
+  assert.equal(result.transferMode, 'copied');
+  assert.equal(result.sourceRetained, false);
+  assert.equal(result.cleanupWarning, '');
+  assert.equal(fs.files.has(crossPaths.source), false);
+  assert.equal(fs.files.has(crossPaths.target), true);
+  assert.equal(fs.copies.length, 1);
+  assert.deepEqual(fs.copies[0], [crossPaths.source, crossPaths.target, 1]);
+  assert.equal(fs.renames.length, 1);
+  assert.equal(fs.renames[0][0], crossPaths.source);
+  assert.match(fs.renames[0][1], /\.voiceover-namer-cleanup-/);
+  assert.deepEqual(fs.unlinks, [fs.renames[0][1]]);
+  assert.equal(premiere.item.mediaPath, crossPaths.target);
+  assert.equal(premiere.item.name, premiere.targetName);
+  assert.deepEqual(premiere.trackItems.map((item) => item.name), [premiere.targetName, premiere.targetName]);
+});
+
+test('cross-volume content verification supports UXP numeric file descriptors', async () => {
+  const fs = makeFs([crossPaths.source]);
+  const descriptors = new Map();
+  let nextDescriptor = 10;
+  let closeCalls = 0;
+  delete fs.readFile;
+  fs.open = async (nativePath) => {
+    if (!fs.files.has(nativePath)) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+    const descriptor = nextDescriptor++;
+    descriptors.set(descriptor, { nativePath, position: 0 });
+    return descriptor;
+  };
+  fs.read = async (descriptor, arrayBuffer, offset, length, position) => {
+    const state = descriptors.get(descriptor);
+    if (!state) throw new Error('invalid descriptor');
+    const bytes = fs.contents.get(state.nativePath);
+    const start = position >= 0 ? position : state.position;
+    const count = Math.min(length, Math.max(0, bytes.byteLength - start));
+    new Uint8Array(arrayBuffer).set(bytes.subarray(start, start + count), offset);
+    if (position < 0) state.position += count;
+    return { bytesRead: count, buffer: arrayBuffer };
+  };
+  fs.close = async (descriptor) => {
+    if (!descriptors.delete(descriptor)) throw new Error('invalid descriptor');
+    closeCalls += 1;
+    return 0;
+  };
+  const premiere = makePremiere({ mediaPath: crossPaths.source });
+
+  const result = await transaction.renameAndRelink(crossVolumeOptions(fs, premiere));
+
+  assert.equal(result.transferMode, 'copied');
+  assert.equal(result.sourceRetained, false);
+  assert.equal(closeCalls, 4);
+  assert.equal(descriptors.size, 0);
+  assert.equal(fs.files.has(crossPaths.target), true);
+});
+
+test('numeric read failures still close the UXP file descriptor', async () => {
+  const fs = makeFs([crossPaths.source]);
+  let descriptorOpen = false;
+  let closeCalls = 0;
+  delete fs.readFile;
+  fs.open = async () => {
+    descriptorOpen = true;
+    return 10;
+  };
+  fs.read = async () => {
+    throw Object.assign(new Error('read failed'), { code: 'EIO' });
+  };
+  fs.close = async () => {
+    descriptorOpen = false;
+    closeCalls += 1;
+    return 0;
+  };
+  const premiere = makePremiere({ mediaPath: crossPaths.source });
+
+  await assert.rejects(
+    transaction.renameAndRelink(crossVolumeOptions(fs, premiere)),
+    /跨盘复制校验失败：源文件无法读取：read failed/,
+  );
+
+  assert.equal(closeCalls, 1);
+  assert.equal(descriptorOpen, false);
+  assert.equal(fs.files.has(crossPaths.source), true);
+  assert.equal(fs.files.has(crossPaths.target), true);
+});
+
+test('SHA-256 initialization fails before a UXP file descriptor is opened', async () => {
+  const fs = makeFs([crossPaths.source]);
+  let openCalls = 0;
+  delete fs.readFile;
+  fs.open = async () => {
+    openCalls += 1;
+    return 10;
+  };
+  fs.read = async () => ({ bytesRead: 0, buffer: new ArrayBuffer(0) });
+  fs.close = async () => 0;
+  const premiere = makePremiere({ mediaPath: crossPaths.source });
+  const originalCreateHasher = sha256.createHasher;
+  sha256.createHasher = () => {
+    throw new Error('hasher unavailable');
+  };
+
+  try {
+    await assert.rejects(
+      transaction.renameAndRelink(crossVolumeOptions(fs, premiere)),
+      /跨盘复制校验失败：源文件无法读取：hasher unavailable/,
+    );
+  } finally {
+    sha256.createHasher = originalCreateHasher;
+  }
+
+  assert.equal(openCalls, 0);
+  assert.equal(fs.files.has(crossPaths.source), true);
+  assert.equal(fs.files.has(crossPaths.target), true);
+});
+
+test('cross-volume copy failure preserves an uncertain partial target and leaves Premiere on the source', async () => {
+  const fs = makeFs([crossPaths.source], {
+    copyError: () => Object.assign(new Error('copy interrupted'), { code: 'EIO' }),
+    leavePartialCopy: true,
+  });
+  const premiere = makePremiere({ mediaPath: crossPaths.source });
+
+  const error = await transaction.renameAndRelink(crossVolumeOptions(fs, premiere)).then(
+    () => null,
+    (caught) => caught,
+  );
+
+  assert.equal(error.code, 'EIO');
+  assert.equal(fs.files.has(crossPaths.source), true);
+  assert.equal(fs.files.has(crossPaths.target), true);
+  assert.ok(error.rollbackWarnings.some((warning) => warning.includes('已保留')));
+  assert.deepEqual(fs.unlinks, []);
+  assert.equal(premiere.item.mediaPath, crossPaths.source);
+  assert.deepEqual(premiere.item.changeCalls, []);
+});
+
+test('cross-volume size mismatch fails before relinking and preserves both files for recovery', async () => {
+  const fs = makeFs([crossPaths.source], {
+    statForPath: (nativePath) => nativePath === crossPaths.target ? { size: 64 } : null,
+  });
+  const premiere = makePremiere({ mediaPath: crossPaths.source });
+
+  await assert.rejects(
+    transaction.renameAndRelink(crossVolumeOptions(fs, premiere)),
+    (error) => /最终文件大小不一致/.test(error.message)
+      && error.rollbackWarnings.some((warning) => warning.includes('已保留')),
+  );
+
+  assert.deepEqual([...fs.files].sort(), [crossPaths.source, crossPaths.target].sort());
+  assert.deepEqual(fs.unlinks, []);
+  assert.deepEqual(premiere.item.changeCalls, []);
+});
+
+test('a target appearing during cross-volume copy is never overwritten', async () => {
+  const externalContents = Buffer.alloc(128, 0xee);
+  const fs = makeFs([crossPaths.source], {
+    beforeCopy: (_source, target, files, contents) => {
+      files.add(crossPaths.target);
+      contents.set(crossPaths.target, externalContents);
+    },
+  });
+  const premiere = makePremiere({ mediaPath: crossPaths.source });
+
+  const error = await transaction.renameAndRelink(crossVolumeOptions(fs, premiere)).then(
+    () => null,
+    (caught) => caught,
+  );
+
+  assert.equal(transaction.isTargetConflict(error), true);
+  assert.equal(fs.files.has(crossPaths.source), true);
+  assert.equal(fs.files.has(crossPaths.target), true);
+  assert.deepEqual(fs.contents.get(crossPaths.target), externalContents);
+  assert.deepEqual(fs.unlinks, []);
+  assert.equal(premiere.item.mediaPath, crossPaths.source);
+  assert.deepEqual(premiere.item.changeCalls, []);
+});
+
+test('cross-volume relink failure keeps both files and restores Premiere to the source', async () => {
+  const fs = makeFs([crossPaths.source]);
+  const premiere = makePremiere({
+    mediaPath: crossPaths.source,
+    changeResult: (path) => path !== crossPaths.target,
+  });
+
+  await assert.rejects(
+    transaction.renameAndRelink(crossVolumeOptions(fs, premiere)),
+    (error) => error.message === 'Premiere 重链接返回失败'
+      && error.rollbackWarnings.some((warning) => warning.includes('事务副本已保留')),
+  );
+
+  assert.equal(fs.files.has(crossPaths.source), true);
+  assert.equal(fs.files.has(crossPaths.target), true);
+  assert.deepEqual(fs.unlinks, []);
+  assert.equal(premiere.item.mediaPath, crossPaths.source);
+  assert.equal(premiere.item.name, '原始素材名');
+});
+
+test('source cleanup failure keeps both copies but leaves Premiere safely linked to the project copy', async () => {
+  const fs = makeFs([crossPaths.source], {
+    renameError: (source, target) => source === crossPaths.source && target.includes('.voiceover-namer-cleanup-')
+      ? Object.assign(new Error('source locked'), { code: 'EBUSY' })
+      : null,
+  });
+  const premiere = makePremiere({ mediaPath: crossPaths.source, trackOriginalNames: ['片段甲', '片段乙'] });
+
+  const result = await transaction.renameAndRelink(crossVolumeOptions(fs, premiere));
+
+  assert.equal(result.transferMode, 'copied');
+  assert.equal(result.sourceRetained, true);
+  assert.match(result.cleanupWarning, /原始采集文件暂未删除/);
+  assert.equal(fs.files.has(crossPaths.source), true);
+  assert.equal(fs.files.has(crossPaths.target), true);
+  assert.equal(fs.renames.filter((entry) => entry[0] === crossPaths.source).length, 4);
+  assert.deepEqual(fs.unlinks, []);
+  assert.equal(premiere.item.mediaPath, crossPaths.target);
+  assert.equal(premiere.item.name, premiere.targetName);
+  assert.deepEqual(premiere.trackItems.map((item) => item.name), [premiere.targetName, premiere.targetName]);
+});
+
+test('same-size target corruption is detected by content hash before Premiere relinks', async () => {
+  const fs = makeFs([crossPaths.source], {
+    afterCopy: (_source, target, _files, contents) => {
+      contents.set(target, Buffer.alloc(128, 0xee));
+    },
+  });
+  const premiere = makePremiere({ mediaPath: crossPaths.source });
+
+  const error = await transaction.renameAndRelink(crossVolumeOptions(fs, premiere)).then(
+    () => null,
+    (caught) => caught,
+  );
+
+  assert.match(error.message, /目标文件内容与已验证副本不一致/);
+  assert.equal(fs.files.has(crossPaths.source), true);
+  assert.equal(fs.files.has(crossPaths.target), true);
+  assert.deepEqual(fs.unlinks, []);
+  assert.deepEqual(premiere.item.changeCalls, []);
+});
+
+test('a target replaced after relinking is detected before source cleanup', async () => {
+  const fs = makeFs([crossPaths.source]);
+  const premiere = makePremiere({
+    mediaPath: crossPaths.source,
+    afterMediaPathChange: (nativePath) => {
+      if (nativePath === crossPaths.target) fs.contents.set(crossPaths.target, Buffer.alloc(128, 0xee));
+    },
+  });
+
+  const result = await transaction.renameAndRelink(crossVolumeOptions(fs, premiere));
+
+  assert.equal(result.sourceRetained, true);
+  assert.match(result.cleanupWarning, /工程目录副本.*内容.*不一致/);
+  assert.equal(fs.files.has(crossPaths.source), true);
+  assert.equal(fs.files.has(crossPaths.target), true);
+  assert.deepEqual(fs.unlinks, []);
+});
+
+test('rollback never deletes a target that was externally replaced', async () => {
+  const fs = makeFs([crossPaths.source]);
+  const premiere = makePremiere({
+    mediaPath: crossPaths.source,
+    changeResult: (nativePath) => {
+      if (nativePath === crossPaths.target) {
+        fs.contents.set(crossPaths.target, Buffer.alloc(128, 0xee));
+        return false;
+      }
+      return true;
+    },
+  });
+
+  const error = await transaction.renameAndRelink(crossVolumeOptions(fs, premiere)).then(
+    () => null,
+    (caught) => caught,
+  );
+
+  assert.equal(error.message, 'Premiere 重链接返回失败');
+  assert.ok(error.rollbackWarnings.some((warning) => warning.includes('已保留')));
+  assert.equal(fs.files.has(crossPaths.source), true);
+  assert.equal(fs.files.has(crossPaths.target), true);
+  assert.deepEqual(fs.unlinks, []);
+  assert.equal(premiere.item.mediaPath, crossPaths.source);
+});
+
+test('a context switch during source cleanup preserves the quarantined source', async () => {
+  const fs = makeFs([crossPaths.source]);
+  const premiere = makePremiere({ mediaPath: crossPaths.source });
+  let validationCalls = 0;
+
+  const result = await transaction.renameAndRelink(crossVolumeOptions(fs, premiere, {
+    validate: async () => {
+      validationCalls += 1;
+      if (validationCalls === 9) throw Object.assign(new Error('项目已切换'), { code: 'VOICEOVER_NAMER_CANCELLED' });
+      return true;
+    },
+  }));
+
+  const quarantinePath = [...fs.files].find((nativePath) => nativePath.includes('.voiceover-namer-cleanup-'));
+  assert.equal(validationCalls, 9);
+  assert.equal(result.sourceRetained, true);
+  assert.match(result.cleanupWarning, /项目或序列.*最终清理前发生切换/);
+  assert.equal(fs.files.has(crossPaths.source), false);
+  assert.equal(fs.files.has(crossPaths.target), true);
+  assert.ok(quarantinePath);
+  assert.deepEqual(fs.unlinks, []);
+});
+
+test('a source missing before cleanup is reported instead of claimed as plugin deletion', async () => {
+  const fs = makeFs([crossPaths.source]);
+  const premiere = makePremiere({
+    mediaPath: crossPaths.source,
+    afterMediaPathChange: (nativePath) => {
+      if (nativePath !== crossPaths.target) return;
+      fs.files.delete(crossPaths.source);
+      fs.contents.delete(crossPaths.source);
+    },
+  });
+
+  const result = await transaction.renameAndRelink(crossVolumeOptions(fs, premiere));
+
+  assert.equal(result.sourceRetained, false);
+  assert.match(result.cleanupWarning, /清理前已经不存在/);
+  assert.equal(fs.files.has(crossPaths.target), true);
+  assert.deepEqual(fs.unlinks, []);
+});
+
+test('a same-size source replacement is quarantined and never deleted', async () => {
+  const fs = makeFs([crossPaths.source]);
+  const replacement = Buffer.alloc(128, 0xee);
+  const premiere = makePremiere({
+    mediaPath: crossPaths.source,
+    afterMediaPathChange: (nativePath) => {
+      if (nativePath === crossPaths.target) fs.contents.set(crossPaths.source, replacement);
+    },
+  });
+
+  const result = await transaction.renameAndRelink(crossVolumeOptions(fs, premiere));
+
+  const quarantinePath = [...fs.files].find((nativePath) => nativePath.includes('.voiceover-namer-cleanup-'));
+  assert.equal(result.sourceRetained, true);
+  assert.match(result.cleanupWarning, /原始采集路径已被替换/);
+  assert.equal(fs.files.has(crossPaths.source), false);
+  assert.equal(fs.files.has(crossPaths.target), true);
+  assert.ok(quarantinePath);
+  assert.deepEqual(fs.contents.get(quarantinePath), replacement);
+  assert.deepEqual(fs.unlinks, []);
 });
 
 test('missing timeline clips fails closed before disk or Premiere mutation', async () => {

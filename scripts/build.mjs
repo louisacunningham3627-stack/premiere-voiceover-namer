@@ -15,7 +15,7 @@ await rm(distDirectory, { recursive: true, force: true });
 await mkdir(path.join(distDirectory, "src"), { recursive: true });
 await cp(pluginDirectory, distDirectory, { recursive: true });
 
-for (const fileName of ["core.js", "state.js", "panel-state.js", "folder-readiness.js", "media-candidates.js", "monitoring-policy.js", "transaction.js", "coordination.js", "main.js"]) {
+for (const fileName of ["core.js", "state.js", "panel-state.js", "folder-readiness.js", "media-candidates.js", "monitoring-policy.js", "sha256.js", "transaction.js", "coordination.js", "main.js"]) {
   await copyFile(path.join(sourceDirectory, fileName), path.join(distDirectory, "src", fileName));
 }
 

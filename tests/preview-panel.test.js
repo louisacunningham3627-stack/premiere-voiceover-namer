@@ -6,6 +6,7 @@ const path = require('node:path');
 
 const panelState = require('../src/panel-state.js');
 const panelStyles = readFileSync(path.join(__dirname, '..', 'plugin', 'styles.css'), 'utf8');
+const panelMainSource = readFileSync(path.join(__dirname, '..', 'src', 'main.js'), 'utf8');
 
 let preview;
 test.before(async () => {
@@ -62,9 +63,19 @@ test('panel preview explains the native microphone zero-setup route', async () =
   assert.match(html, /画外音录制/);
   assert.match(html, /唯一文件名/);
   assert.match(html, /自动重链接/);
+  assert.match(html, /最终保存位置/);
+  assert.match(html, /\.prproj 同级的“录音”文件夹/);
+  assert.match(html, /只用于发现 Premiere 原始录音，不会改变最终保存位置/);
   assert.match(html, /id="guideProject"/);
   assert.match(html, /id="guideFolder"/);
   assert.match(html, /id="guideListen"/);
+});
+
+test('panel preview never presents the capture source as the final save location', async () => {
+  const html = await preview.renderIndex('listening', 'rename');
+  assert.equal(html.includes('"folderPath":"D:\\\\318最终版\\\\录音"'), true);
+  assert.doesNotMatch(html, /Adobe Premiere Pro Captured Audio/);
+  assert.match(html, /正在移入工程录音目录并命名/);
 });
 
 test('panel puts the real processing result before secondary guidance and connection details', async () => {
@@ -117,6 +128,7 @@ test('activity history uses the panel scrollport instead of a nested scrollbar',
   assert.match(panelStyles, /\.activity-list\s*\{[^}]*overflow:\s*visible;/s);
   assert.doesNotMatch(panelStyles, /\.activity-list\s*\{[^}]*overflow-y:\s*auto;/s);
   assert.doesNotMatch(panelStyles, /\.activity-list\s*\{[^}]*max-height:/s);
+  assert.match(panelMainSource, /var LOG_LIMIT = 20;/);
 });
 
 test('production panel uses native controls and the flex/block subset', async () => {

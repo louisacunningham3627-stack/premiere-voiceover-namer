@@ -24,7 +24,7 @@
   var MAX_TARGET_CONFLICT_RETRIES = 8;
   var UNMATCHED_RETRY_MS = 10000;
   var UNMATCHED_LONG_RETRY_MS = 30000;
-  var LOG_LIMIT = 100;
+  var LOG_LIMIT = 20;
   var EXAMPLE_RECORDING_ID = "7f3c9a2e4b1d48f0a6c1e8d2b9f04a77";
 
   var context = null;
@@ -117,8 +117,16 @@
     return !!(context && context.statePath);
   }
 
+  function recordingFolderForCandidate(candidate) {
+    var project = candidate && candidate.project ? candidate.project : context && context.project;
+    return Core.recordingDirectoryFromProjectPath(project && project.path ? project.path : "");
+  }
+
   function isNormalizedRecording(candidate) {
-    return !!(candidate && Core.isGlobalRecordingName(candidate.mediaPath));
+    if (!candidate || !Core.isGlobalRecordingName(candidate.mediaPath)) return false;
+    var recordingFolder = recordingFolderForCandidate(candidate);
+    if (!recordingFolder) return false;
+    return Core.sameNativePath(Core.splitNativePath(candidate.mediaPath).dir, recordingFolder);
   }
 
   function resetWatchFolderValidation() {
@@ -152,25 +160,36 @@
       projectValue = "正在读取";
     }
 
-    var folderPath = projectState && projectState.watchFolder ? projectState.watchFolder : "";
+    var sourceFolderPath = projectState && projectState.watchFolder ? projectState.watchFolder : "";
     var captureHint = context && context.capturePathHint ? context.capturePathHint : "";
-    var folderValue = watchFolderValid
-      ? folderPath
-      : captureHint
-        ? "采集盘：" + captureHint
-        : "首次录音后自动识别";
-    if (folderPath && !watchFolderValid && watchFolderProblem) {
-      folderValue = "原位置不可用，将重新自动识别";
+    var outputPath = context && context.recordingFolderPath ? context.recordingFolderPath : "";
+    var outputReady = !!(context && context.recordingFolderValid);
+    var folderValue = outputPath || "保存工程后自动确定";
+    if (outputPath && !outputReady && context.recordingFolderProblem) {
+      folderValue = "无法使用：" + context.recordingFolderProblem;
     }
     var sequenceValue = context && context.sequence ? context.sequence.name || "当前序列" : "未打开序列";
     if (!context && contextRefreshCount > 0) sequenceValue = "正在读取";
 
     setText("projectName", projectValue, projectValue);
-    setText("watchFolder", folderValue, folderPath || captureHint || folderValue);
+    setText("watchFolder", folderValue, outputPath || folderValue);
     setText("sequenceName", sequenceValue, sequenceValue);
     setReadiness("readinessProject", readiness.project, "工程已保存", projectValue);
     setReadiness("readinessSequence", readiness.sequence, "序列已打开", sequenceValue);
-    setReadiness("readinessFolder", watchFolderValid, "录音位置", folderValue);
+    setReadiness("readinessFolder", outputReady, "最终保存位置", folderValue);
+    var chooseFolderButton = element("chooseFolderButton");
+    if (chooseFolderButton) {
+      var sourceScope = "只用于发现 Premiere 原始录音，不会改变最终保存位置。";
+      var sourceHint = watchFolderValid
+        ? "备用采集目录：" + sourceFolderPath
+        : sourceFolderPath && watchFolderProblem
+          ? "备用采集目录不可用：" + watchFolderProblem
+          : captureHint
+            ? "当前自动识别来源：" + captureHint
+            : "仅在无法自动识别 Premiere 原始录音时设置";
+      chooseFolderButton.title = sourceScope + sourceHint;
+      chooseFolderButton.setAttribute("aria-label", "设置备用采集目录。" + sourceScope + sourceHint);
+    }
     setText("readinessCount", readiness.completed === 2 ? "自动待命" : readiness.completed + "/2 已完成");
   }
 
@@ -188,7 +207,7 @@
     var summaries = {
       found: "已发现新 WAV",
       stable: "等待文件写入完成",
-      rename: "正在重命名磁盘文件",
+      rename: "正在移入工程录音目录并命名",
       relink: "正在重链接并同步时间线片段名",
       complete: "最近一条已完成",
       error: "处理失败",
@@ -203,7 +222,7 @@
       element("pipelineRename"),
       element("pipelineRelink"),
     ];
-    var labels = ["发现 WAV", "等待稳定", "重命名", "重链接并同步时间线片段名"];
+    var labels = ["发现 WAV", "等待稳定", "移入并命名", "重链接并同步时间线片段名"];
     var statusLabels = { waiting: "等待", active: "正在进行", done: "已完成", error: "失败" };
     var pipeline = PanelState.derivePipeline(currentJob || {});
 
@@ -559,6 +578,9 @@
       identity: getProjectIdentity(project),
       sequenceIdentity: getSequenceIdentity(sequence),
       statePath: project.path ? sidecarPathFor(project) : "",
+      recordingFolderPath: Core.recordingDirectoryFromProjectPath(project.path || ""),
+      recordingFolderValid: false,
+      recordingFolderProblem: "",
       capturePathHint: await getCapturePathHint(project),
     };
   }
@@ -597,7 +619,14 @@
       }
 
       var nextProjectState = await loadProjectState(nextContext);
-      var folderInspection = await FolderReadiness.inspect(fs, nextProjectState.watchFolder);
+      var inspections = await Promise.all([
+        FolderReadiness.inspect(fs, nextProjectState.watchFolder),
+        nextContext.recordingFolderPath
+          ? FolderReadiness.ensure(fs, nextContext.recordingFolderPath)
+          : Promise.resolve({ valid: false, created: false, problem: "" }),
+      ]);
+      var folderInspection = inspections[0];
+      var recordingFolderInspection = inspections[1];
       if (
         refreshGeneration !== contextRefreshGeneration ||
         !panelVisible ||
@@ -608,9 +637,17 @@
       if (changedProject && monitoring) stopMonitoring("项目已切换");
 
       context = nextContext;
+      context.recordingFolderValid = recordingFolderInspection.valid === true;
+      context.recordingFolderProblem = recordingFolderInspection.problem || "";
       projectState = nextProjectState;
       applyWatchFolderInspection(folderInspection);
-      panelErrorMessage = "";
+      panelErrorMessage = projectIsSaved() && !context.recordingFolderValid
+        ? context.recordingFolderProblem || "工程录音目录不可用"
+        : "";
+
+      if (recordingFolderInspection.created) {
+        addLog("ok", "已创建最终保存目录：" + context.recordingFolderPath);
+      }
 
       updateControls();
 
@@ -619,6 +656,7 @@
         panelVisible &&
         lifecycleGuard.isCurrent(refreshLifecycleGeneration) &&
         projectIsSaved() &&
+        context.recordingFolderValid &&
         context.sequence &&
         !monitoring &&
         !userPaused
@@ -964,6 +1002,9 @@
         ensureLifecycle(startLifecycleGeneration);
         if (!context) throw new Error("未连接 Premiere 项目");
         if (!projectIsSaved()) throw new Error("请先保存 Premiere 工程");
+        if (!context.recordingFolderPath || !context.recordingFolderValid) {
+          throw new Error(context.recordingFolderProblem || "工程录音目录不可用");
+        }
         if (!context.sequence) throw new Error("请先打开一个序列");
         if (!Core.secureRandomAvailable(globalThis)) {
           throw new Error("当前 UXP 不支持安全随机源，无法生成全局唯一录音 ID");
@@ -1084,18 +1125,39 @@
       return Core.fileNameFromPath(nativePath);
     });
     var projectName = candidate.projectName || (candidate.project && candidate.project.name) || context.project.name;
+    var targetDirectory = recordingFolderForCandidate(candidate);
+    if (!targetDirectory) throw new Error("无法从 Premiere 工程路径确定最终保存目录");
+    var destinationInspection = await FolderReadiness.ensure(fs, targetDirectory);
+    if (!destinationInspection.valid) {
+      throw new Error(destinationInspection.problem || "工程录音目录不可用");
+    }
+    if (context && context.identity === candidate.projectIdentity) {
+      context.recordingFolderPath = targetDirectory;
+      context.recordingFolderValid = true;
+      context.recordingFolderProblem = "";
+    }
     var sourceParts = Core.splitNativePath(candidate.mediaPath);
+    var targetSeparator = Core.splitNativePath(targetDirectory).separator;
+    var managedSource = Core.parseManagedName(sourceParts.base);
+    var preservedPlan = managedSource && managedSource.format === "global-id"
+      ? {
+          recordingId: managedSource.recordingId,
+          targetName: Core.buildRecordingName({ projectName: projectName, recordingId: managedSource.recordingId }),
+          attempts: 1,
+        }
+      : null;
     var collisionRetries = 0;
 
     for (var attempt = 0; attempt < 1000; attempt += 1) {
-      var namePlan = Core.createAvailableRecordingName({
-        projectName: projectName,
-        existingNames: existingNames,
-        randomSource: globalThis,
-      });
+      var namePlan = preservedPlan || Core.createAvailableRecordingName({
+          projectName: projectName,
+          existingNames: existingNames,
+          randomSource: globalThis,
+        });
+      preservedPlan = null;
       collisionRetries += namePlan.attempts - 1;
       var targetName = namePlan.targetName;
-      var targetPath = Core.joinNativePath(sourceParts.dir, targetName, sourceParts.separator);
+      var targetPath = Core.joinNativePath(targetDirectory, targetName, targetSeparator);
       if (Core.sameNativePath(candidate.mediaPath, targetPath) || !(await Transaction.exists(fs, targetPath))) {
         return {
           candidate: candidate,
@@ -1145,7 +1207,7 @@
         }
 
         try {
-          await Transaction.renameAndRelink({
+          var transactionResult = await Transaction.renameAndRelink({
             fs: fs,
             project: candidateProject,
             projectItem: candidate.projectItem,
@@ -1153,6 +1215,7 @@
             sourcePath: candidate.mediaPath,
             targetPath: plan.targetPath,
             targetName: plan.targetName,
+            operationId: plan.recordingId,
             samePath: Core.sameNativePath,
             onStage: function (stage) {
               setJobStage(stage, candidate, plan);
@@ -1161,6 +1224,9 @@
               return ensureActiveMediaContext(candidate.projectIdentity, candidate.sequenceIdentity);
             },
           });
+          plan.transferMode = transactionResult.transferMode;
+          plan.sourceRetained = transactionResult.sourceRetained;
+          plan.cleanupWarning = transactionResult.cleanupWarning;
           break;
         } catch (error) {
           if (!isCancellation(error) && Transaction.isTargetConflict(error) && targetConflictRetries < MAX_TARGET_CONFLICT_RETRIES) {
@@ -1213,12 +1279,13 @@
       sessionMetrics.processed += 1;
       setJobStage("complete", candidate, plan);
       if (learnedFolder && !Core.sameNativePath(operationState.watchFolder, learnedFolder)) {
-        addLog("ok", "已自动识别录音目录：" + learnedFolder);
+        addLog("ok", "已自动识别原始采集目录：" + learnedFolder);
       }
+      if (plan.cleanupWarning) addLog("warn", plan.cleanupWarning);
       addLog(
         "ok",
         (plan.collisionRetries ? "重名避让 " + plan.collisionRetries + " 次 · " : "")
-          + "已重链接并同步时间线片段名 · "
+          + "已移入工程录音目录并同步 Premiere · "
           + plan.targetName
       );
       updateControls();
@@ -1515,7 +1582,7 @@
             var deferred = unmatchedFolderFiles.get(key) || { firstSeenAt: now, warned: false, nextProbeAt: now };
             if (!deferred.warned && now - deferred.firstSeenAt > PENDING_WARNING_MS) {
               deferred.warned = true;
-              addLog("warn", Core.fileNameFromPath(candidate.mediaPath) + "：无法确认是 Premiere 录音；可在备用设置中指定目录");
+              addLog("warn", Core.fileNameFromPath(candidate.mediaPath) + "：无法确认是 Premiere 录音；可点“源目录”指定备用采集目录");
             }
             deferred.nextProbeAt = now + DISCOVERY_TRACK_SCAN_MS;
             unmatchedFolderFiles.set(key, deferred);
@@ -1768,8 +1835,7 @@
         throw error;
       }
       applyWatchFolderInspection(inspection);
-      setText("watchFolder", nativePath, nativePath);
-      addLog("ok", "录音目录已设为 " + nativePath);
+      addLog("ok", "备用采集目录已设为 " + nativePath);
       updateControls();
     } catch (error) {
       sessionMetrics.errors += 1;

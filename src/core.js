@@ -249,6 +249,14 @@
     return dir + (separator || (dir.indexOf("\\") >= 0 ? "\\" : "/")) + fileName;
   }
 
+  function recordingDirectoryFromProjectPath(projectPath) {
+    var nativePath = String(projectPath || "").trim();
+    if (!nativePath || nativePathPlatform(nativePath) === "relative") return "";
+    var parts = splitNativePath(nativePath);
+    if (!parts.dir || !parts.base) return "";
+    return joinNativePath(parts.dir, "录音", parts.separator);
+  }
+
   function nativePathPlatform(nativePath) {
     var text = String(nativePath || "");
     if (/^[a-z]:[\\/]/i.test(text) || /^\\\\/.test(text)) return "windows";
@@ -320,6 +328,7 @@
     parseManagedName: parseManagedName,
     splitNativePath: splitNativePath,
     joinNativePath: joinNativePath,
+    recordingDirectoryFromProjectPath: recordingDirectoryFromProjectPath,
     nativePathPlatform: nativePathPlatform,
     normalizePathForComparison: normalizePathForComparison,
     sameNativePath: sameNativePath,

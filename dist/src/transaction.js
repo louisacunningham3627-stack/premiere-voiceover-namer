@@ -1,13 +1,16 @@
 (function (root, factory) {
   "use strict";
 
-  var api = factory();
+  var hashApi = typeof module !== "undefined" && module.exports
+    ? require("./sha256.js")
+    : root.VoiceoverNamerSha256;
+  var api = factory(hashApi);
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
   } else {
     root.VoiceoverNamerTransaction = api;
   }
-})(typeof globalThis !== "undefined" ? globalThis : this, function () {
+})(typeof globalThis !== "undefined" ? globalThis : this, function (HashApi) {
   "use strict";
 
   function wait(milliseconds) {
@@ -46,6 +49,250 @@
     if (!successResult(result)) {
       throw new Error("文件系统返回了意外结果: " + result);
     }
+  }
+
+  function errorCode(error) {
+    var current = error;
+    for (var depth = 0; current && depth < 4; depth += 1) {
+      var code = String(current.code || "").toUpperCase();
+      if (code) return code;
+      current = current.cause;
+    }
+    return "";
+  }
+
+  function isCrossDeviceError(error) {
+    var code = errorCode(error);
+    if (code === "EXDEV") return true;
+    var message = String(error && error.message || error || "");
+    return /cross-device|different device|跨卷|跨设备|不同磁盘/i.test(message);
+  }
+
+  function isMissingError(error) {
+    return errorCode(error) === "ENOENT" || /no such file|找不到|不存在/i.test(String(error && error.message || error || ""));
+  }
+
+  async function unlinkFile(fs, nativePath) {
+    var result = await fs.unlink(nativePath);
+    if (!successResult(result)) {
+      throw new Error("文件系统删除返回了意外结果: " + result);
+    }
+  }
+
+  function numericStatValue(stat, millisecondKey, dateKey) {
+    var value = Number(stat && stat[millisecondKey] || 0);
+    if (!value && stat && stat[dateKey]) value = new Date(stat[dateKey]).getTime();
+    return value || 0;
+  }
+
+  function snapshotFromStat(stat) {
+    return {
+      size: Number(stat && stat.size || 0),
+      mtime: numericStatValue(stat, "mtimeMs", "mtime"),
+      birthtime: numericStatValue(stat, "birthtimeMs", "birthtime"),
+      ctime: numericStatValue(stat, "ctimeMs", "ctime"),
+      ino: stat && stat.ino != null ? String(stat.ino) : "",
+    };
+  }
+
+  function sameFileSnapshot(left, right) {
+    if (!left || !right) return false;
+    return left.size === right.size
+      && left.mtime === right.mtime
+      && left.birthtime === right.birthtime
+      && left.ctime === right.ctime
+      && left.ino === right.ino;
+  }
+
+  async function readFileSnapshot(fs, nativePath) {
+    return snapshotFromStat(await fs.lstat(nativePath));
+  }
+
+  function nativeVolumeKey(nativePath) {
+    var value = String(nativePath || "");
+    var drive = value.match(/^([a-z]):[\\/]/i);
+    if (drive) return "drive:" + drive[1].toLowerCase();
+    var unc = value.match(/^[\\/]{2}([^\\/]+)[\\/]([^\\/]+)/);
+    if (unc) return "unc:" + unc[1].toLowerCase() + "/" + unc[2].toLowerCase();
+    var macVolume = value.match(/^\/Volumes\/([^/]+)/);
+    if (macVolume) return "volume:" + macVolume[1];
+    return "";
+  }
+
+  function pathsAreOnDifferentKnownVolumes(sourcePath, targetPath) {
+    var sourceVolume = nativeVolumeKey(sourcePath);
+    var targetVolume = nativeVolumeKey(targetPath);
+    return !!sourceVolume && !!targetVolume && sourceVolume !== targetVolume;
+  }
+
+  function byteView(value, byteLength) {
+    var view;
+    if (value instanceof Uint8Array) {
+      view = value;
+    } else if (typeof ArrayBuffer !== "undefined" && value instanceof ArrayBuffer) {
+      view = new Uint8Array(value);
+    } else if (typeof ArrayBuffer !== "undefined" && ArrayBuffer.isView && ArrayBuffer.isView(value)) {
+      view = new Uint8Array(value.buffer, value.byteOffset, value.byteLength);
+    } else {
+      throw new Error("文件系统返回了无法校验的二进制数据");
+    }
+    return byteLength == null || byteLength === view.byteLength ? view : view.subarray(0, byteLength);
+  }
+
+  async function closeReadHandle(fs, handle) {
+    if (typeof handle === "number") {
+      var result = await fs.close(handle);
+      if (!successResult(result)) throw new Error("文件读取句柄关闭失败");
+      return;
+    }
+    if (handle && typeof handle.close === "function") await handle.close();
+  }
+
+  async function hashFileWithHandle(fs, nativePath, delay) {
+    var hasher = HashApi.createHasher();
+    var handle = await fs.open(nativePath, "r");
+    var totalBytes = 0;
+    var chunks = 0;
+    var chunkSize = 1024 * 1024;
+    try {
+      var numericBuffer = typeof handle === "number" ? new ArrayBuffer(chunkSize) : null;
+      var typedBuffer = typeof handle !== "number" && handle && typeof handle.read === "function"
+        ? new Uint8Array(chunkSize)
+        : null;
+      while (true) {
+        var bytesRead = 0;
+        var output;
+        if (typeof handle === "number") {
+          if (typeof fs.read !== "function" || typeof fs.close !== "function") {
+            throw new Error("当前 UXP 文件系统缺少分块读取能力");
+          }
+          var numericResult = await fs.read(handle, numericBuffer, 0, chunkSize, -1);
+          bytesRead = Number(numericResult && numericResult.bytesRead || 0);
+          output = numericResult && numericResult.buffer || numericBuffer;
+        } else if (handle && typeof handle.read === "function") {
+          var handleResult = await handle.read(typedBuffer, 0, chunkSize, null);
+          bytesRead = Number(handleResult && handleResult.bytesRead || 0);
+          output = handleResult && handleResult.buffer || typedBuffer;
+        } else {
+          throw new Error("文件系统返回了无法使用的读取句柄");
+        }
+        if (!bytesRead) break;
+        hasher.update(byteView(output, bytesRead));
+        totalBytes += bytesRead;
+        chunks += 1;
+        if (chunks % 4 === 0) await delay(0);
+      }
+    } finally {
+      await closeReadHandle(fs, handle);
+    }
+    return { digest: hasher.digestHex(), size: totalBytes };
+  }
+
+  async function hashFile(fs, nativePath, delay) {
+    if (!HashApi || typeof HashApi.createHasher !== "function") {
+      var unsupported = new Error("当前插件缺少录音内容校验模块");
+      unsupported.code = "ENOSYS";
+      throw unsupported;
+    }
+    if (fs && typeof fs.open === "function") {
+      return hashFileWithHandle(fs, nativePath, delay);
+    }
+    if (!fs || typeof fs.readFile !== "function") {
+      var noReader = new Error("当前 UXP 文件系统不支持录音内容校验");
+      noReader.code = "ENOSYS";
+      throw noReader;
+    }
+    var contents = byteView(await fs.readFile(nativePath));
+    return { digest: HashApi.hashHex(contents), size: contents.byteLength };
+  }
+
+  async function verifyFileContent(context, nativePath, expectedSnapshot, expectedDigest) {
+    try {
+      var before = await readFileSnapshot(context.fs, nativePath);
+      if (expectedSnapshot && !sameFileSnapshot(expectedSnapshot, before)) {
+        return { valid: false, missing: false, reason: "身份已变化" };
+      }
+      var content = await hashFile(context.fs, nativePath, context.delay);
+      var after = await readFileSnapshot(context.fs, nativePath);
+      if (!sameFileSnapshot(before, after)) {
+        return { valid: false, missing: false, reason: "在校验期间发生变化" };
+      }
+      if (content.size !== after.size) {
+        return { valid: false, missing: false, reason: "读取长度与文件大小不一致" };
+      }
+      if (expectedDigest && content.digest !== expectedDigest) {
+        return { valid: false, missing: false, reason: "内容与已验证副本不一致" };
+      }
+      return {
+        valid: true,
+        missing: false,
+        digest: content.digest,
+        snapshot: after,
+      };
+    } catch (error) {
+      return {
+        valid: false,
+        missing: isMissingError(error),
+        reason: isMissingError(error) ? "不存在" : "无法读取：" + (error.message || error),
+      };
+    }
+  }
+
+  async function copyFileExclusive(fs, sourcePath, targetPath) {
+    if (!fs || typeof fs.copyFile !== "function") {
+      var unsupported = new Error("当前 UXP 文件系统不支持跨盘复制");
+      unsupported.code = "ENOSYS";
+      throw unsupported;
+    }
+    var exclusiveFlag = fs.constants && fs.constants.COPYFILE_EXCL != null
+      ? fs.constants.COPYFILE_EXCL
+      : 1;
+    var result = await fs.copyFile(sourcePath, targetPath, exclusiveFlag);
+    if (!successResult(result)) {
+      throw new Error("文件系统复制返回了意外结果: " + result);
+    }
+  }
+
+  async function transferFile(context) {
+    context.sourceSnapshot = await readFileSnapshot(context.fs, context.sourcePath);
+    if (!pathsAreOnDifferentKnownVolumes(context.sourcePath, context.targetPath)) {
+      try {
+        await renameFile(context.fs, context.sourcePath, context.targetPath);
+        context.fileRenamed = true;
+        context.transferMode = "renamed";
+        return;
+      } catch (error) {
+        if (!isCrossDeviceError(error)) throw error;
+      }
+    }
+
+    context.copyAttempted = true;
+    await copyFileExclusive(context.fs, context.sourcePath, context.targetPath);
+    context.fileCopied = true;
+    context.transferMode = "copied";
+
+    var sourceAfterCopy = await readFileSnapshot(context.fs, context.sourcePath);
+    if (!sameFileSnapshot(context.sourceSnapshot, sourceAfterCopy)) {
+      var changed = new Error("跨盘复制期间源文件发生变化，请重新扫描");
+      changed.code = "VOICEOVER_NAMER_NOT_READY";
+      throw changed;
+    }
+    var targetSnapshot = await readFileSnapshot(context.fs, context.targetPath);
+    if (targetSnapshot.size !== context.sourceSnapshot.size) {
+      throw new Error("跨盘复制校验失败：最终文件大小不一致");
+    }
+
+    var sourceContent = await verifyFileContent(context, context.sourcePath, context.sourceSnapshot, "");
+    if (!sourceContent.valid) {
+      throw new Error("跨盘复制校验失败：源文件" + sourceContent.reason);
+    }
+    var targetContent = await verifyFileContent(context, context.targetPath, targetSnapshot, sourceContent.digest);
+    if (!targetContent.valid) {
+      throw new Error("跨盘复制校验失败：目标文件" + targetContent.reason);
+    }
+    context.sourceDigest = sourceContent.digest;
+    context.targetDigest = targetContent.digest;
+    context.targetSnapshot = targetContent.snapshot;
   }
 
   async function verifyLink(projectItem, expectedPath, samePath) {
@@ -342,9 +589,101 @@
     }
   }
 
+  async function restoreContextNames(context, recoveryName, useTargetName, warnings) {
+    try {
+      var trackItemRestoreNames = (context.trackItemNames || []).map(function (entry) {
+        return {
+          trackItem: entry.trackItem,
+          name: useTargetName ? context.targetName : entry.originalName,
+        };
+      });
+      var namesNeedRestore = String(context.projectItem.name || "") !== String(recoveryName);
+      for (var nameIndex = 0; nameIndex < trackItemRestoreNames.length; nameIndex += 1) {
+        try {
+          var currentTrackItemName = await trackItemRestoreNames[nameIndex].trackItem.getName();
+          if (String(currentTrackItemName) !== String(trackItemRestoreNames[nameIndex].name)) namesNeedRestore = true;
+        } catch (error) {
+          namesNeedRestore = true;
+        }
+      }
+      if (!namesNeedRestore) return;
+      if (!setProjectAndTrackItemNames(
+        context.project,
+        context.projectItem,
+        recoveryName,
+        trackItemRestoreNames,
+        "恢复录音素材和时间线片段名"
+      )) {
+        warnings.push("恢复素材名和时间线片段名返回失败");
+        return;
+      }
+      if (!(await waitForVerifiedName(context.projectItem, recoveryName, context.delay))) {
+        warnings.push("恢复素材名后验证失败");
+      }
+      if (!(await waitForVerifiedTrackItemNames(trackItemRestoreNames, context.delay))) {
+        warnings.push("恢复时间线片段名后验证失败");
+      }
+    } catch (error) {
+      warnings.push("恢复素材名和时间线片段名失败: " + error.message);
+    }
+  }
+
+  async function bestEffortCopiedRollback(context, warnings) {
+    var sourceExists = await exists(context.fs, context.sourcePath);
+    var targetExists = await exists(context.fs, context.targetPath);
+    var sourceMatches = false;
+    if (sourceExists) {
+      try {
+        sourceMatches = sameFileSnapshot(context.sourceSnapshot, await readFileSnapshot(context.fs, context.sourcePath));
+      } catch (error) {}
+    }
+
+    var targetMatches = false;
+    if (targetExists && context.targetDigest) {
+      var targetVerification = await verifyFileContent(
+        context,
+        context.targetPath,
+        context.targetSnapshot,
+        context.targetDigest
+      );
+      targetMatches = targetVerification.valid;
+    }
+
+    var recoveryPath = sourceExists && sourceMatches
+      ? context.sourcePath
+      : targetMatches ? context.targetPath : "";
+    var useTargetName = recoveryPath === context.targetPath;
+    var recoveryName = useTargetName ? context.targetName : context.originalName;
+    if (useTargetName) {
+      warnings.push(sourceExists
+        ? "源文件身份发生变化；保留工程目录中的已验证副本并维持新路径"
+        : "源文件已不存在；保留工程目录中的已验证副本并维持新路径");
+    }
+
+    if (!recoveryPath) {
+      warnings.push("没有找到身份可确认的源文件或工程目录副本，未继续修改媒体路径和名称");
+      if (targetExists) warnings.push("工程录音目录中的未确认文件已保留，插件没有自动删除");
+      return;
+    }
+
+    var linkRecovered = await recoverLink(context, recoveryPath);
+    if (!linkRecovered) warnings.push("恢复媒体路径后验证失败");
+    await restoreContextNames(context, recoveryName, useTargetName, warnings);
+    if (!useTargetName && targetExists) {
+      warnings.push(context.fileCopied
+        ? "工程录音目录中的事务副本已保留，插件没有在回滚时自动删除"
+        : "工程录音目录目标路径中的文件已保留，插件没有在回滚时自动删除");
+    }
+  }
+
   async function bestEffortRollback(context) {
     var warnings = [];
-    if (!context.fileRenamed && !context.linkChanged && !context.itemNameChanged) return warnings;
+    if (!context.fileRenamed && !context.copyAttempted && !context.fileCopied && !context.linkChanged && !context.itemNameChanged) return warnings;
+
+    if (context.copyAttempted || context.fileCopied) {
+      await bestEffortCopiedRollback(context, warnings);
+      return warnings;
+    }
 
     var sourceExists = await exists(context.fs, context.sourcePath);
     var targetExists = await exists(context.fs, context.targetPath);
@@ -370,73 +709,222 @@
     }
 
     var recoveryPath = preferTarget ? context.targetPath : sourceExists ? context.sourcePath : targetExists ? context.targetPath : "";
-    var recoveryName = recoveryPath === context.targetPath ? context.targetName : context.originalName;
-    if (recoveryPath === context.targetPath) {
-      warnings.push("旧文件名未恢复，保留新文件并维持新路径");
+    var useTargetName = recoveryPath === context.targetPath;
+    var recoveryName = useTargetName ? context.targetName : context.originalName;
+    if (useTargetName) warnings.push("旧文件名未恢复，保留新文件并维持新路径");
+
+    if (!recoveryPath) {
+      warnings.push("源文件和目标文件都不存在，未修改媒体路径、素材名或时间线片段名");
+      return warnings;
     }
 
-    if (recoveryPath) {
-      var linkRecovered = await recoverLink(context, recoveryPath);
-      if (!linkRecovered && recoveryPath === context.sourcePath && sourceExists && !targetExists) {
-        var actualPath = "";
+    var linkRecovered = await recoverLink(context, recoveryPath);
+    if (!linkRecovered && recoveryPath === context.sourcePath && sourceExists && !targetExists) {
+      var actualPath = "";
+      try {
+        actualPath = await context.projectItem.getMediaFilePath();
+      } catch (error) {}
+      if (context.samePath(actualPath, context.targetPath)) {
         try {
-          actualPath = await context.projectItem.getMediaFilePath();
-        } catch (error) {}
-        if (context.samePath(actualPath, context.targetPath)) {
-          try {
-            await renameFile(context.fs, context.sourcePath, context.targetPath);
-            sourceExists = false;
-            targetExists = true;
-            recoveryPath = context.targetPath;
-            recoveryName = context.targetName;
-            warnings.push("旧媒体路径无法恢复，已将文件重新放回当前新路径");
-            linkRecovered = await recoverLink(context, recoveryPath);
-          } catch (error) {
-            warnings.push("恢复当前新路径失败: " + error.message);
-          }
+          await renameFile(context.fs, context.sourcePath, context.targetPath);
+          sourceExists = false;
+          targetExists = true;
+          recoveryPath = context.targetPath;
+          useTargetName = true;
+          recoveryName = context.targetName;
+          warnings.push("旧媒体路径无法恢复，已将文件重新放回当前新路径");
+          linkRecovered = await recoverLink(context, recoveryPath);
+        } catch (error) {
+          warnings.push("恢复当前新路径失败: " + error.message);
         }
       }
-      if (!linkRecovered) warnings.push("恢复媒体路径后验证失败");
+    }
+    if (!linkRecovered) warnings.push("恢复媒体路径后验证失败");
+    await restoreContextNames(context, recoveryName, useTargetName, warnings);
+    return warnings;
+  }
+
+  function cleanupQuarantinePath(context, attempt) {
+    var sourcePath = String(context.sourcePath || "");
+    var separatorIndex = Math.max(sourcePath.lastIndexOf("\\"), sourcePath.lastIndexOf("/"));
+    var directory = separatorIndex >= 0 ? sourcePath.slice(0, separatorIndex + 1) : "";
+    var token = String(context.operationId || context.targetName || "recording")
+      .replace(/[^a-z0-9]/gi, "")
+      .slice(-40);
+    var suffix = attempt ? "-" + String(attempt + 1) : "";
+    return directory + ".voiceover-namer-cleanup-" + token + suffix;
+  }
+
+  async function cleanupContextIsValid(context) {
+    try {
+      await validateContext(context.validate);
+      return true;
+    } catch (error) {
+      return false;
+    }
+  }
+
+  async function cleanupCopiedSource(context) {
+    var lastError = null;
+    if (!(await cleanupContextIsValid(context))) {
+      return {
+        sourceRetained: true,
+        cleanupWarning: "最终文件已链接，但项目或序列在清理前发生切换；原始采集文件已保留",
+      };
+    }
+
+    var targetVerification = await verifyFileContent(
+      context,
+      context.targetPath,
+      context.targetSnapshot,
+      context.targetDigest
+    );
+    if (!targetVerification.valid) {
+      return {
+        sourceRetained: true,
+        cleanupWarning: "最终文件已链接，但工程目录副本" + targetVerification.reason + "；原始采集文件已保留",
+      };
+    }
+
+    for (var attempt = 0; attempt < 4; attempt += 1) {
+      if (!(await cleanupContextIsValid(context))) {
+        return {
+          sourceRetained: true,
+          cleanupWarning: "最终文件已链接，但项目或序列在清理前发生切换；原始采集文件已保留",
+        };
+      }
+
+      var currentTargetSnapshot;
+      try {
+        currentTargetSnapshot = await readFileSnapshot(context.fs, context.targetPath);
+      } catch (error) {
+        return {
+          sourceRetained: true,
+          cleanupWarning: "最终文件已链接，但无法再次核验工程目录副本；原始采集文件已保留",
+        };
+      }
+      if (!sameFileSnapshot(context.targetSnapshot, currentTargetSnapshot)) {
+        return {
+          sourceRetained: true,
+          cleanupWarning: "最终文件已链接，但工程目录副本身份已变化；原始采集文件已保留",
+        };
+      }
+
+      var sourceSnapshot;
+      try {
+        sourceSnapshot = await readFileSnapshot(context.fs, context.sourcePath);
+      } catch (error) {
+        if (isMissingError(error)) {
+          return {
+            sourceRetained: false,
+            cleanupWarning: "最终文件已链接，但原始采集文件在插件清理前已经不存在，无法确认由插件删除",
+          };
+        }
+        lastError = error;
+        if (attempt < 3) {
+          await context.delay(150);
+          continue;
+        }
+        return {
+          sourceRetained: true,
+          cleanupWarning: "最终文件已链接，但无法核验原始采集文件；该文件已保留",
+        };
+      }
+      if (!sameFileSnapshot(context.sourceSnapshot, sourceSnapshot)) {
+        return {
+          sourceRetained: true,
+          cleanupWarning: "最终文件已链接，但原始采集路径的文件身份已变化；未删除该文件",
+        };
+      }
+
+      var quarantinePath = cleanupQuarantinePath(context, attempt);
+      if (await exists(context.fs, quarantinePath)) {
+        lastError = new Error("临时清理路径已被占用");
+        if (attempt < 3) continue;
+        return {
+          sourceRetained: true,
+          cleanupWarning: "最终文件已链接，但无法取得唯一清理路径；原始采集文件已保留",
+        };
+      }
 
       try {
-        var trackItemRestoreNames = (context.trackItemNames || []).map(function (entry) {
-          return { trackItem: entry.trackItem, name: entry.originalName };
-        });
-        var namesNeedRestore = String(context.projectItem.name || "") !== String(recoveryName);
-        for (var nameIndex = 0; nameIndex < trackItemRestoreNames.length; nameIndex += 1) {
-          try {
-            var currentTrackItemName = await trackItemRestoreNames[nameIndex].trackItem.getName();
-            if (String(currentTrackItemName) !== String(trackItemRestoreNames[nameIndex].name)) namesNeedRestore = true;
-          } catch (error) {
-            namesNeedRestore = true;
-          }
-        }
-        if (namesNeedRestore) {
-          if (!setProjectAndTrackItemNames(
-            context.project,
-            context.projectItem,
-            recoveryName,
-            trackItemRestoreNames,
-            "Restore captured audio names"
-          )) {
-            warnings.push("恢复素材名和时间线片段名返回失败");
-          } else {
-            if (!(await waitForVerifiedName(context.projectItem, recoveryName, context.delay))) {
-              warnings.push("恢复素材名后验证失败");
-            }
-            if (!(await waitForVerifiedTrackItemNames(trackItemRestoreNames, context.delay))) {
-              warnings.push("恢复时间线片段名后验证失败");
-            }
-          }
-        }
+        await renameFile(context.fs, context.sourcePath, quarantinePath);
       } catch (error) {
-        warnings.push("恢复素材名和时间线片段名失败: " + error.message);
+        if (isMissingError(error)) {
+          return {
+            sourceRetained: false,
+            cleanupWarning: "最终文件已链接，但原始采集文件在插件清理时被外部移除，无法确认由插件删除",
+          };
+        }
+        lastError = error;
+        if (attempt < 3) {
+          await context.delay(150);
+          continue;
+        }
+        return {
+          sourceRetained: true,
+          cleanupWarning: "最终文件已保存并链接，但原始采集文件暂未删除：" + (error.message || error),
+        };
       }
-    } else {
-      warnings.push("源文件和目标文件都不存在，未修改媒体路径、素材名或时间线片段名");
-    }
 
-    return warnings;
+      context.sourceQuarantinePath = quarantinePath;
+      var quarantined = await verifyFileContent(context, quarantinePath, null, context.sourceDigest);
+      if (!quarantined.valid) {
+        return {
+          sourceRetained: true,
+          cleanupWarning: "清理时检测到原始采集路径已被替换；文件未删除，保留在 " + quarantinePath,
+        };
+      }
+      if (!(await cleanupContextIsValid(context))) {
+        return {
+          sourceRetained: true,
+          cleanupWarning: "项目或序列在最终清理前发生切换；原始采集文件未删除，保留在 " + quarantinePath,
+        };
+      }
+
+      var targetAfterQuarantine;
+      try {
+        targetAfterQuarantine = await readFileSnapshot(context.fs, context.targetPath);
+      } catch (error) {
+        return {
+          sourceRetained: true,
+          cleanupWarning: "最终清理前无法再次核验工程目录副本；原始采集文件未删除，保留在 " + quarantinePath,
+        };
+      }
+      if (!sameFileSnapshot(context.targetSnapshot, targetAfterQuarantine)) {
+        return {
+          sourceRetained: true,
+          cleanupWarning: "最终清理前工程目录副本身份已变化；原始采集文件未删除，保留在 " + quarantinePath,
+        };
+      }
+
+      try {
+        await unlinkFile(context.fs, quarantinePath);
+        context.sourceDeleted = true;
+        context.sourceQuarantinePath = "";
+        if (!(await exists(context.fs, quarantinePath))) {
+          return { sourceRetained: false, cleanupWarning: "" };
+        }
+        lastError = new Error("删除后临时清理路径仍存在");
+      } catch (error) {
+        if (isMissingError(error)) {
+          context.sourceQuarantinePath = "";
+          return {
+            sourceRetained: false,
+            cleanupWarning: "原始采集文件在最终清理时被外部移除，无法确认由插件删除",
+          };
+        }
+        lastError = error;
+      }
+      return {
+        sourceRetained: true,
+        cleanupWarning: "最终文件已保存并链接，但原始采集文件暂未删除，保留在 " + quarantinePath + "：" + (lastError && (lastError.message || lastError) || "未知错误"),
+      };
+    }
+    return {
+      sourceRetained: true,
+      cleanupWarning: "最终文件已保存并链接，但原始采集文件暂未删除：" + (lastError && (lastError.message || lastError) || "未知错误"),
+    };
   }
 
   async function renameAndRelink(options) {
@@ -459,7 +947,18 @@
       originalName: originalName,
       samePath: samePath,
       delay: delay,
+      validate: options.validate,
+      operationId: options.operationId || targetName,
+      transferMode: "",
       fileRenamed: false,
+      copyAttempted: false,
+      fileCopied: false,
+      sourceDeleted: false,
+      sourceSnapshot: null,
+      sourceDigest: "",
+      targetDigest: "",
+      targetSnapshot: null,
+      sourceQuarantinePath: "",
       linkChanged: false,
       itemNameChanged: false,
       trackItemNames: [],
@@ -481,8 +980,7 @@
       if (!canChange) throw new Error("Premiere 不允许修改此素材的媒体路径");
 
       await validateContext(options.validate);
-      await renameFile(fs, sourcePath, targetPath);
-      context.fileRenamed = true;
+      await transferFile(context);
 
       await validateContext(options.validate);
       notifyStage(options.onStage, "relink");
@@ -513,11 +1011,18 @@
 
       await validateContext(options.validate);
 
+      var cleanup = context.fileCopied
+        ? await cleanupCopiedSource(context)
+        : { sourceRetained: false, cleanupWarning: "" };
+
       return {
         sourcePath: sourcePath,
         targetPath: targetPath,
         targetName: targetName,
         originalName: originalName,
+        transferMode: context.transferMode,
+        sourceRetained: cleanup.sourceRetained,
+        cleanupWarning: cleanup.cleanupWarning,
       };
     } catch (error) {
       var rollbackWarnings = await bestEffortRollback(context);
