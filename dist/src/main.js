@@ -207,7 +207,7 @@
     var summaries = {
       found: "已发现新 WAV",
       stable: "等待文件写入完成",
-      rename: "正在移入工程录音目录并命名",
+      rename: "正在移入工程媒体目录并命名",
       relink: "正在重链接并同步时间线片段名",
       complete: "最近一条已完成",
       error: "处理失败",
@@ -642,7 +642,7 @@
       projectState = nextProjectState;
       applyWatchFolderInspection(folderInspection);
       panelErrorMessage = projectIsSaved() && !context.recordingFolderValid
-        ? context.recordingFolderProblem || "工程录音目录不可用"
+        ? context.recordingFolderProblem || "工程媒体目录不可用"
         : "";
 
       if (recordingFolderInspection.created) {
@@ -1003,7 +1003,7 @@
         if (!context) throw new Error("未连接 Premiere 项目");
         if (!projectIsSaved()) throw new Error("请先保存 Premiere 工程");
         if (!context.recordingFolderPath || !context.recordingFolderValid) {
-          throw new Error(context.recordingFolderProblem || "工程录音目录不可用");
+          throw new Error(context.recordingFolderProblem || "工程媒体目录不可用");
         }
         if (!context.sequence) throw new Error("请先打开一个序列");
         if (!Core.secureRandomAvailable(globalThis)) {
@@ -1129,7 +1129,7 @@
     if (!targetDirectory) throw new Error("无法从 Premiere 工程路径确定最终保存目录");
     var destinationInspection = await FolderReadiness.ensure(fs, targetDirectory);
     if (!destinationInspection.valid) {
-      throw new Error(destinationInspection.problem || "工程录音目录不可用");
+      throw new Error(destinationInspection.problem || "工程媒体目录不可用");
     }
     if (context && context.identity === candidate.projectIdentity) {
       context.recordingFolderPath = targetDirectory;
@@ -1285,7 +1285,7 @@
       addLog(
         "ok",
         (plan.collisionRetries ? "重名避让 " + plan.collisionRetries + " 次 · " : "")
-          + "已移入工程录音目录并同步 Premiere · "
+          + "已移入工程媒体目录并同步 Premiere · "
           + plan.targetName
       );
       updateControls();

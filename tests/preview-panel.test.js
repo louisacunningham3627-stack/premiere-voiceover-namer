@@ -64,7 +64,7 @@ test('panel preview explains the native microphone zero-setup route', async () =
   assert.match(html, /唯一文件名/);
   assert.match(html, /自动重链接/);
   assert.match(html, /最终保存位置/);
-  assert.match(html, /\.prproj 同级的“录音”文件夹/);
+  assert.match(html, /\.prproj 同级的 Adobe Premiere Pro Captured and Generated 文件夹/);
   assert.match(html, /只用于发现 Premiere 原始录音，不会改变最终保存位置/);
   assert.match(html, /id="guideProject"/);
   assert.match(html, /id="guideFolder"/);
@@ -73,9 +73,9 @@ test('panel preview explains the native microphone zero-setup route', async () =
 
 test('panel preview never presents the capture source as the final save location', async () => {
   const html = await preview.renderIndex('listening', 'rename');
-  assert.equal(html.includes('"folderPath":"D:\\\\318最终版\\\\录音"'), true);
+  assert.equal(html.includes('"folderPath":"D:\\\\318最终版\\\\Adobe Premiere Pro Captured and Generated"'), true);
   assert.doesNotMatch(html, /Adobe Premiere Pro Captured Audio/);
-  assert.match(html, /正在移入工程录音目录并命名/);
+  assert.match(html, /正在移入工程媒体目录并命名/);
 });
 
 test('panel puts the real processing result before secondary guidance and connection details', async () => {

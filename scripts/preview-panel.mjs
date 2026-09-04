@@ -80,7 +80,7 @@ export function createPreviewScenario(requestedState, requestedStage) {
     state,
     input: inputs[state],
     projectName: state === "disconnected" ? "未打开工程" : state === "loading" ? "正在读取" : "318最终版.prproj",
-    folderPath: hasFolder ? "D:\\318最终版\\录音" : "",
+    folderPath: hasFolder ? "D:\\318最终版\\Adobe Premiere Pro Captured and Generated" : "",
     sequenceName: state === "disconnected" || state === "loading" || state === "no-sequence" ? "未打开序列" : "主时间线",
     job,
     metrics: {
@@ -207,7 +207,7 @@ export function previewBootstrap(requestedState, requestedStage) {
         var summaries = {
           found: "已发现新 WAV",
           stable: "等待文件写入完成",
-          rename: "正在移入工程录音目录并命名",
+          rename: "正在移入工程媒体目录并命名",
           relink: "正在更新 Premiere 链接",
           error: "处理失败",
         };

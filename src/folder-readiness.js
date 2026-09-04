@@ -43,10 +43,10 @@
 
   function creationProblem(error) {
     var code = String(error && error.code || "").toUpperCase();
-    if (code === "EACCES" || code === "EPERM") return "无法创建工程录音目录：当前账户没有写入权限。";
-    if (code === "ENOSPC") return "无法创建工程录音目录：目标磁盘空间不足。";
-    if (code === "EROFS") return "无法创建工程录音目录：目标磁盘为只读状态。";
-    return "无法创建工程录音目录：文件系统拒绝了创建操作。";
+    if (code === "EACCES" || code === "EPERM") return "无法创建工程媒体目录：当前账户没有写入权限。";
+    if (code === "ENOSPC") return "无法创建工程媒体目录：目标磁盘空间不足。";
+    if (code === "EROFS") return "无法创建工程媒体目录：目标磁盘为只读状态。";
+    return "无法创建工程媒体目录：文件系统拒绝了创建操作。";
   }
 
   async function ensure(fs, nativePath) {
@@ -61,7 +61,7 @@
       return {
         valid: false,
         created: false,
-        problem: "当前 UXP 无法创建工程录音目录。",
+        problem: "当前 UXP 无法创建工程媒体目录。",
       };
     }
 
@@ -84,7 +84,7 @@
       return {
         valid: false,
         created: false,
-        problem: "工程录音目录创建后仍无法访问。",
+        problem: "工程媒体目录创建后仍无法访问。",
       };
     }
     return { valid: true, created: created, problem: "" };

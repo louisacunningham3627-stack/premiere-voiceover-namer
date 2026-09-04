@@ -254,7 +254,7 @@
     if (!nativePath || nativePathPlatform(nativePath) === "relative") return "";
     var parts = splitNativePath(nativePath);
     if (!parts.dir || !parts.base) return "";
-    return joinNativePath(parts.dir, "录音", parts.separator);
+    return joinNativePath(parts.dir, "Adobe Premiere Pro Captured and Generated", parts.separator);
   }
 
   function nativePathPlatform(nativePath) {

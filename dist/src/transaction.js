@@ -662,7 +662,7 @@
 
     if (!recoveryPath) {
       warnings.push("没有找到身份可确认的源文件或工程目录副本，未继续修改媒体路径和名称");
-      if (targetExists) warnings.push("工程录音目录中的未确认文件已保留，插件没有自动删除");
+      if (targetExists) warnings.push("工程媒体目录中的未确认文件已保留，插件没有自动删除");
       return;
     }
 
@@ -671,8 +671,8 @@
     await restoreContextNames(context, recoveryName, useTargetName, warnings);
     if (!useTargetName && targetExists) {
       warnings.push(context.fileCopied
-        ? "工程录音目录中的事务副本已保留，插件没有在回滚时自动删除"
-        : "工程录音目录目标路径中的文件已保留，插件没有在回滚时自动删除");
+        ? "工程媒体目录中的事务副本已保留，插件没有在回滚时自动删除"
+        : "工程媒体目录目标路径中的文件已保留，插件没有在回滚时自动删除");
     }
   }
 

@@ -45,10 +45,26 @@ test('path and filename helpers respect Windows and POSIX boundaries', () => {
   assert.equal(core.joinNativePath('/captures/', 'take.wav'), '/captures/take.wav');
   assert.equal(core.joinNativePath('/', 'take.wav'), '/take.wav');
   assert.equal(core.joinNativePath('', 'take.wav'), 'take.wav');
-  assert.equal(core.recordingDirectoryFromProjectPath('D:\\Projects\\节目.prproj'), 'D:\\Projects\\录音');
-  assert.equal(core.recordingDirectoryFromProjectPath('\\\\SERVER\\Share\\项目\\节目.prproj'), '\\\\SERVER\\Share\\项目\\录音');
-  assert.equal(core.recordingDirectoryFromProjectPath('/Volumes/Edit/项目/节目.prproj'), '/Volumes/Edit/项目/录音');
-  assert.equal(core.recordingDirectoryFromProjectPath('/节目.prproj'), '/录音');
+  assert.equal(
+    core.recordingDirectoryFromProjectPath('D:\\Projects\\节目.prproj'),
+    'D:\\Projects\\Adobe Premiere Pro Captured and Generated',
+  );
+  assert.equal(
+    core.recordingDirectoryFromProjectPath('D:\\节目.prproj'),
+    'D:\\Adobe Premiere Pro Captured and Generated',
+  );
+  assert.equal(
+    core.recordingDirectoryFromProjectPath('\\\\SERVER\\Share\\项目\\节目.prproj'),
+    '\\\\SERVER\\Share\\项目\\Adobe Premiere Pro Captured and Generated',
+  );
+  assert.equal(
+    core.recordingDirectoryFromProjectPath('/Volumes/Edit/项目/节目.prproj'),
+    '/Volumes/Edit/项目/Adobe Premiere Pro Captured and Generated',
+  );
+  assert.equal(
+    core.recordingDirectoryFromProjectPath('/节目.prproj'),
+    '/Adobe Premiere Pro Captured and Generated',
+  );
   assert.equal(core.recordingDirectoryFromProjectPath('relative/节目.prproj'), '');
   assert.equal(core.recordingDirectoryFromProjectPath(''), '');
 

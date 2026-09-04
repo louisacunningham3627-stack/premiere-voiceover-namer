@@ -61,13 +61,13 @@ test('folder readiness creates and verifies a missing project recording director
       calls.push(['mkdir', path]);
       present = true;
     },
-  }, 'E:\\节目\\录音');
+  }, 'E:\\节目\\Adobe Premiere Pro Captured and Generated');
 
   assert.deepEqual(result, { valid: true, created: true, problem: '' });
   assert.deepEqual(calls, [
-    ['lstat', 'E:\\节目\\录音'],
-    ['mkdir', 'E:\\节目\\录音'],
-    ['lstat', 'E:\\节目\\录音'],
+    ['lstat', 'E:\\节目\\Adobe Premiere Pro Captured and Generated'],
+    ['mkdir', 'E:\\节目\\Adobe Premiere Pro Captured and Generated'],
+    ['lstat', 'E:\\节目\\Adobe Premiere Pro Captured and Generated'],
   ]);
 });
 
@@ -76,7 +76,7 @@ test('folder readiness reuses an existing project recording directory without mk
   const result = await folderReadiness.ensure({
     async lstat() { return { isDirectory: () => true }; },
     async mkdir() { mkdirCalls += 1; },
-  }, '/Volumes/Edit/节目/录音');
+  }, '/Volumes/Edit/节目/Adobe Premiere Pro Captured and Generated');
 
   assert.deepEqual(result, { valid: true, created: false, problem: '' });
   assert.equal(mkdirCalls, 0);
@@ -94,11 +94,11 @@ test('folder readiness reports a project recording directory creation failure', 
       error.code = 'EACCES';
       throw error;
     },
-  }, 'E:\\节目\\录音');
+  }, 'E:\\节目\\Adobe Premiere Pro Captured and Generated');
 
   assert.equal(result.valid, false);
   assert.equal(result.created, false);
-  assert.match(result.problem, /无法创建工程录音目录/);
+  assert.match(result.problem, /无法创建工程媒体目录/);
   assert.match(result.problem, /没有写入权限/);
   assert.doesNotMatch(result.problem, /permission denied/i);
 });

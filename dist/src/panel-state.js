@@ -60,7 +60,7 @@
       );
     }
     if (input.processing === true) {
-      return view("processing", "busy", "处理中", "检测到原生录音", "正在整理文件", "录音停止写入后会移入工程录音目录并更新 Premiere 链接。", "", "", showStop, ready);
+      return view("processing", "busy", "处理中", "检测到原生录音", "正在整理文件", "录音停止写入后会移入工程媒体目录并更新 Premiere 链接。", "", "", showStop, ready);
     }
     if (input.scanning === true) {
       return view("scanning", "busy", "扫描中", "正在检查遗漏", "扫描当前序列", "找到未整理的录音后，会先显示文件名预览。", "", "", showStop, ready);
@@ -78,7 +78,7 @@
       return view("no-sequence", "warning", "待准备", "还差活动序列", "打开要录音的序列", "打开序列后，插件会自动布防。", "refresh", "序列打开后连接", false, ready);
     }
     if (input.monitoring === true) {
-      return view("listening", "active", "自动待命", "无需插件前置操作", "直接点音轨麦克风录音", "录音结束后会自动移入工程录音目录、命名并重链接。", "", "", true, ready);
+      return view("listening", "active", "自动待命", "无需插件前置操作", "直接点音轨麦克风录音", "录音结束后会自动移入工程媒体目录、命名并重链接。", "", "", true, ready);
     }
     if (input.paused === true) {
       return view("paused", "warning", "已暂停", "自动命名没有运行", "恢复后继续录音", "恢复只需一次，不必重新选择目录或重启 Premiere。", "resume", "恢复自动命名", false, ready);

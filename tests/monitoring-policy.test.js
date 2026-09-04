@@ -101,6 +101,21 @@ test('trusted capture paths recognize the Premiere capture marker without a sele
   );
 });
 
+test('Premiere capture markers must match a complete path segment', () => {
+  assert.equal(
+    policy.isTrustedCapturePath(trustedOptions(
+      'E:\\Projects\\Adobe Premiere Pro Captured and GeneratedX\\音频 4.wav',
+    )),
+    false,
+  );
+  assert.equal(
+    policy.isTrustedCapturePath(trustedOptions(
+      'E:\\Projects\\prefix Adobe Premiere Pro Captured and Generated\\音频 5.wav',
+    )),
+    false,
+  );
+});
+
 test('ordinary WAV files outside capture locations are not trusted', () => {
   assert.equal(
     policy.isTrustedCapturePath(trustedOptions('E:\\Music\\旁白.wav')),

@@ -30,5 +30,5 @@ test('cross-volume cleanup warnings are surfaced without undoing the verified pr
   const body = functionBody('executeCandidate', 'synchronizeNormalizedRecordingNames');
   assert.match(body, /plan\.sourceRetained = transactionResult\.sourceRetained/);
   assert.match(body, /addLog\("warn", plan\.cleanupWarning\)/);
-  assert.match(body, /已移入工程录音目录并同步 Premiere/);
+  assert.match(body, /已移入工程媒体目录并同步 Premiere/);
 });

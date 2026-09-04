@@ -202,7 +202,7 @@ const paths = {
 
 const crossPaths = {
   source: 'C:\\Captures\\source.wav',
-  target: 'E:\\剪辑工程\\录音\\项目-7f3c9a2e4b1d48f0a6c1e8d2b9f04a77.wav',
+  target: 'E:\\剪辑工程\\Adobe Premiere Pro Captured and Generated\\项目-7f3c9a2e4b1d48f0a6c1e8d2b9f04a77.wav',
 };
 
 const commonOptions = (fs, premiere, extra = {}) => ({
