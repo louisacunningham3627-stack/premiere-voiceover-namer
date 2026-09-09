@@ -225,8 +225,15 @@
     return null;
   }
 
-  function splitNativePath(nativePath) {
+  function plainNativePath(nativePath) {
     var text = String(nativePath || "");
+    if (/^\\\\\?\\UNC\\/i.test(text)) return "\\\\" + text.slice(8);
+    if (/^\\\\\?\\[a-z]:\\/i.test(text)) return text.slice(4);
+    return text;
+  }
+
+  function splitNativePath(nativePath) {
+    var text = plainNativePath(nativePath);
     var winIndex = text.lastIndexOf("\\");
     var posixIndex = text.lastIndexOf("/");
     var index = Math.max(winIndex, posixIndex);
@@ -250,7 +257,7 @@
   }
 
   function recordingDirectoryFromProjectPath(projectPath) {
-    var nativePath = String(projectPath || "").trim();
+    var nativePath = plainNativePath(projectPath).trim();
     if (!nativePath || nativePathPlatform(nativePath) === "relative") return "";
     var parts = splitNativePath(nativePath);
     if (!parts.dir || !parts.base) return "";
@@ -288,6 +295,7 @@
   }
 
   function normalizePathForComparison(nativePath) {
+    nativePath = plainNativePath(nativePath);
     var raw = String(nativePath || "").replace(/\\/g, "/");
     var platform = nativePathPlatform(nativePath);
     var isUnc = platform === "windows" && raw.indexOf("//") === 0;
@@ -326,6 +334,7 @@
     isGlobalRecordingName: isGlobalRecordingName,
     createAvailableRecordingName: createAvailableRecordingName,
     parseManagedName: parseManagedName,
+    plainNativePath: plainNativePath,
     splitNativePath: splitNativePath,
     joinNativePath: joinNativePath,
     recordingDirectoryFromProjectPath: recordingDirectoryFromProjectPath,

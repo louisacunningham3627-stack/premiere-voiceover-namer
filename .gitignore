@@ -1,4 +1,6 @@
 node_modules/
+**/.bridge/
+**/bridge-location.json
 work/
 outputs/
 .ui-craft/

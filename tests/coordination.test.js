@@ -3,6 +3,54 @@ const assert = require('node:assert/strict');
 
 const coordination = require('../src/coordination.js');
 
+test('recording retry retains its reserved name and refreshes source evidence', async () => {
+  const pending = {};
+  let calls = 0;
+  const createPlan = async () => ({ targetName: `name-${++calls}.wav` });
+  const first = await coordination.reserveRecordingPlan(pending, { sourceSignature: 'writing' }, createPlan);
+  const candidate = { sourceSignature: 'finalized', trackItems: ['current'] };
+  const retry = await coordination.reserveRecordingPlan(pending, candidate, createPlan);
+  assert.equal(first, retry);
+  assert.equal(calls, 1);
+  assert.equal(retry.sourceSignature, 'finalized');
+  assert.equal(retry.candidate, candidate);
+});
+
+test('another recording reusing a released default path gets its own plan', async () => {
+  let calls = 0;
+  const createPlan = async () => ({ targetName: `name-${++calls}.wav` });
+  const first = await coordination.reserveRecordingPlan({}, {}, createPlan);
+  const next = await coordination.reserveRecordingPlan({}, {}, createPlan);
+  assert.notEqual(first.targetName, next.targetName);
+});
+
+test('reservation failure can be retried without storing an incomplete plan', async () => {
+  const pending = {};
+  await assert.rejects(coordination.reserveRecordingPlan(pending, {}, async () => { throw new Error('busy'); }), /busy/);
+  assert.equal(pending.plan, undefined);
+  const plan = await coordination.reserveRecordingPlan(pending, {}, async () => ({ targetName: 'ok.wav' }));
+  assert.equal(plan.targetName, 'ok.wav');
+});
+
+test('a conflict replacement remains reserved on the next retry', async () => {
+  const pending = {};
+  const original = await coordination.reserveRecordingPlan(pending, {}, async () => ({ targetName: 'occupied.wav' }));
+  Object.assign(original, { targetName: 'replacement.wav' });
+  const retry = await coordination.reserveRecordingPlan(pending, {}, async () => { throw new Error('must reuse'); });
+  assert.equal(retry.targetName, 'replacement.wav');
+});
+
+test('automatic processing passes the reservation into the real transaction path', () => {
+  const fs = require('node:fs');
+  const path = require('node:path');
+  const source = fs.readFileSync(path.join(__dirname, '../src/main.js'), 'utf8');
+  const body = source.slice(source.indexOf('async function advancePending('), source.indexOf('async function scanTick('));
+  assert.ok(body.indexOf('Coordination.reserveRecordingPlan(') < body.indexOf('MonitoringPolicy.isFileStable('));
+  assert.match(body, /reservedPlan\.sourceSignature = candidate\.sourceSignature/);
+  assert.match(body, /executeCandidate\(candidate, allEntries, reservedPlan\)/);
+  assert.match(body, /if \(!retryableLock\) pending\.stablePolls = 0/);
+});
+
 test('operation queue serializes automatic and manual work in call order', async () => {
   const queue = coordination.createOperationQueue();
   const events = [];

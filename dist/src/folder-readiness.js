@@ -49,9 +49,53 @@
     return "无法创建工程媒体目录：文件系统拒绝了创建操作。";
   }
 
-  async function ensure(fs, nativePath) {
+  function entryUrl(nativePath) {
+    var path = String(nativePath).replace(/\\/g, "/");
+    return "file:" + (/^[a-z]:\//i.test(path) ? "/" : "") + path;
+  }
+
+  function errorDetail(error) {
+    return String(error && error.message || error || "未知错误")
+      .replace(/[\r\n\t]+/g, " ").slice(0, 240);
+  }
+
+  async function ensureWithEntries(storage, nativePath) {
+    var path = String(nativePath).replace(/\\/g, "/").replace(/\/+$/, "");
+    var boundary = path.lastIndexOf("/");
+    var name = path.slice(boundary + 1);
+    if (boundary < 0 || !name || name === "." || name === "..") {
+      throw new Error("工程媒体目录必须是绝对路径下的子文件夹。");
+    }
+    var parentPath = path.slice(0, boundary) || "/";
+    if (/^[a-z]:$/i.test(parentPath)) parentPath += "/";
+    var parent = await storage.getEntryWithUrl(entryUrl(parentPath));
+    if (!parent || parent.isFolder !== true) throw new Error("工程所在路径不是文件夹。");
+    var existing = null;
+    try { existing = await parent.getEntry(name); } catch (error) { /* Creation verifies access below. */ }
+    if (existing) {
+      if (existing.isFolder !== true) throw new Error("工程媒体目录被同名文件占用，不会覆盖该文件。");
+      return { valid: true, created: false, problem: "" };
+    }
+    var creationError = null;
+    try { await parent.createFolder(name); } catch (error) { creationError = error; }
+    // Re-read even after an error: Premiere or another refresh may have created it concurrently.
+    var verified;
+    try { verified = await parent.getEntry(name); } catch (error) { throw creationError || error; }
+    if (!verified || verified.isFolder !== true) {
+      throw creationError || new Error("工程媒体目录创建后仍不是可访问的文件夹。");
+    }
+    return { valid: true, created: !creationError, problem: "" };
+  }
+
+  async function ensure(fs, nativePath, storage) {
     if (!nativePath) {
       return { valid: false, created: false, problem: "请先保存 Premiere 工程。" };
+    }
+
+    var entryError = null;
+    if (storage && typeof storage.getEntryWithUrl === "function") {
+      try { return await ensureWithEntries(storage, nativePath); }
+      catch (error) { entryError = error; }
     }
 
     var current = await inspect(fs, nativePath);
@@ -74,7 +118,9 @@
         return {
           valid: false,
           created: false,
-          problem: creationProblem(error),
+          problem: creationProblem(error) + " 目标：" + nativePath + (entryError
+            ? " UXP：" + errorDetail(entryError) + "；fs：" + errorDetail(error)
+            : (!(error && error.code) ? " " + errorDetail(error) : "")),
         };
       }
     }

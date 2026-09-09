@@ -12,6 +12,9 @@
   var MonitoringPolicy = globalThis.VoiceoverNamerMonitoringPolicy;
   var Transaction = globalThis.VoiceoverNamerTransaction;
   var Coordination = globalThis.VoiceoverNamerCoordination;
+  var Recycle = globalThis.VoiceoverNamerRecycle;
+  var RecycleHost = globalThis.VoiceoverNamerRecycleHost;
+  var recycler = null;
 
   var POLL_INTERVAL_MS = 1200;
   var DISCOVERY_TRACK_SCAN_MS = 2500;
@@ -212,6 +215,7 @@
       complete: "最近一条已完成",
       error: "处理失败",
     };
+    if (currentJob.waitingForLock) return "等待文件释放，其他录音继续排队";
     return summaries[currentJob.stage] || "等待新录音";
   }
 
@@ -319,6 +323,10 @@
     setText("stateKicker", view.kicker);
     setText("stateTitle", view.title);
     setText("stateDescription", view.description);
+    if (currentJob && currentJob.waitingForLock && !panelErrorMessage) {
+      setText("stateTitle", "等待文件释放");
+      setText("stateDescription", "录音暂时被占用，释放后自动继续；可以继续录制。");
+    }
     renderReadiness(view.readiness);
     renderUsageGuide(view);
     renderPipeline();
@@ -341,6 +349,7 @@
     if (sourceName) currentJob.sourceName = sourceName;
     if (plan && plan.targetName) currentJob.targetName = plan.targetName;
     currentJob.stage = stage;
+    currentJob.waitingForLock = false;
     currentJob.errorStage = "";
     currentJob.errorMessage = "";
     panelErrorMessage = "";
@@ -413,6 +422,44 @@
 
   function withOperationLock(operation) {
     return operationQueue.run(operation);
+  }
+
+  function createRecycler(activeContext) {
+    if (!/^[a-z]:[\\/]/i.test(activeContext.project.path)) {
+      addLog("warn", "当前系统或工程位置不支持自动回收，命名功能保持启用");
+      return null;
+    }
+    var generation = monitorGuard.current();
+    async function validate() {
+      ensureLifecycle();
+      if (!monitoring || !monitorGuard.isCurrent(generation)) throw cancellationError("回收监听已停止");
+      var project = await ppro.Project.getActiveProject();
+      if (!project || getProjectIdentity(project) !== activeContext.identity) throw cancellationError("回收项目已切换");
+    }
+    return Recycle.create({
+      fs: fs, context: activeContext, signature: statIdentitySignature, hashFile: Transaction.hashFile,
+      randomSource: globalThis, validate: validate, log: addLog,
+      ensureFolder: async function (path) {
+        var result = await FolderReadiness.ensure(fs, path, uxp.storage.localFileSystem);
+        if (!result.valid) throw new Error(result.problem || "回收登记目录不可写");
+      },
+      snapshot: function () { return RecycleHost.snapshot(activeContext.project, ppro, Core.normalizePathForComparison, validate); },
+      removeItem: function (entry) { return RecycleHost.removeUnusedItem(activeContext.project, entry); },
+      bridge: async function () {
+        var folder = await uxp.storage.localFileSystem.getPluginFolder();
+        if (!/^[a-z]:[\\/]/i.test(folder.nativePath)) throw new Error("当前系统尚未启用原生回收助手，命名功能不受影响");
+        var location = JSON.parse(await readText(Core.joinNativePath(folder.nativePath, "native\\windows\\bridge-location.json", "\\")));
+        var directory = String(location.directory || "");
+        if (!/^[a-z]:\\/i.test(directory)) throw new Error("回收助手数据目录无效");
+        var token = (await readText(directory + "\\token.txt")).trim();
+        if (!/^[0-9a-f]{64}$/.test(token)) throw new Error("回收助手未安装或身份校验失败");
+        return { directory: directory, token: token };
+      },
+      launch: async function (uri) {
+        var error = await uxp.shell.openExternal(uri, "回收已弃用的本插件录音");
+        if (error) throw new Error(String(error));
+      },
+    });
   }
 
   function cancellationError(message) {
@@ -622,7 +669,7 @@
       var inspections = await Promise.all([
         FolderReadiness.inspect(fs, nextProjectState.watchFolder),
         nextContext.recordingFolderPath
-          ? FolderReadiness.ensure(fs, nextContext.recordingFolderPath)
+          ? FolderReadiness.ensure(fs, nextContext.recordingFolderPath, uxp.storage.localFileSystem)
           : Promise.resolve({ valid: false, created: false, problem: "" }),
       ]);
       var folderInspection = inspections[0];
@@ -1035,6 +1082,7 @@
 
         monitorGuard.bump();
         monitoring = true;
+        recycler = createRecycler(context);
         userPaused = false;
         currentJob = null;
         timer = setInterval(scanTick, POLL_INTERVAL_MS);
@@ -1055,6 +1103,8 @@
   }
 
   function stopMonitoring(reason, options) {
+    if (recycler) recycler.stop();
+    recycler = null;
     if (timer) clearInterval(timer);
     if (scheduledTick) clearTimeout(scheduledTick);
     timer = null;
@@ -1104,15 +1154,7 @@
   }
 
   function isRetryableLock(error) {
-    var current = error;
-    for (var depth = 0; current && depth < 4; depth += 1) {
-      var code = String(current.code || "").toUpperCase();
-      var message = String(current.message || current);
-      if (["EBUSY", "EACCES", "EPERM"].indexOf(code) >= 0) return true;
-      if (/busy|locked|being used|另一个进程|占用/i.test(message)) return true;
-      current = current.cause;
-    }
-    return false;
+    return MonitoringPolicy.isRetryableLock(error);
   }
 
   async function targetPlanFor(candidate, allEntries) {
@@ -1127,7 +1169,7 @@
     var projectName = candidate.projectName || (candidate.project && candidate.project.name) || context.project.name;
     var targetDirectory = recordingFolderForCandidate(candidate);
     if (!targetDirectory) throw new Error("无法从 Premiere 工程路径确定最终保存目录");
-    var destinationInspection = await FolderReadiness.ensure(fs, targetDirectory);
+    var destinationInspection = await FolderReadiness.ensure(fs, targetDirectory, uxp.storage.localFileSystem);
     if (!destinationInspection.valid) {
       throw new Error(destinationInspection.problem || "工程媒体目录不可用");
     }
@@ -1193,7 +1235,7 @@
           }
           targetConflictRetries += 1;
           var occupiedRetries = Number(plan.collisionRetries || 0) + 1;
-          plan = await targetPlanFor(candidate, allEntries);
+          Object.assign(plan, await targetPlanFor(candidate, allEntries));
           plan.collisionRetries += occupiedRetries;
           continue;
         }
@@ -1233,7 +1275,7 @@
             targetConflictRetries += 1;
             var raceRetries = Number(plan.collisionRetries || 0) + 1;
             addLog("warn", "目标名刚被占用，正在重新生成录音 ID");
-            plan = await targetPlanFor(candidate, allEntries);
+            Object.assign(plan, await targetPlanFor(candidate, allEntries));
             plan.collisionRetries += raceRetries;
             continue;
           }
@@ -1256,6 +1298,11 @@
         await saveProjectState(operationContext, nextState);
       } catch (error) {
         addLog("warn", "录音已处理，但处理历史写入失败: " + (error.message || error));
+      }
+
+      if (candidate.recycleEligible && recycler && context && context.identity === operationContext.identity) {
+        try { await recycler.register(plan, candidate); }
+        catch (registrationError) { addLog("warn", "命名已完成，但未登记自动回收：" + (registrationError.message || registrationError)); }
       }
 
       if (context && context.identity === operationContext.identity) {
@@ -1291,7 +1338,6 @@
       updateControls();
       return plan;
     } catch (error) {
-      if (!isCancellation(error)) setJobError(error, candidate);
       throw error;
     }
   }
@@ -1357,7 +1403,10 @@
       pending = MonitoringPolicy.observeFileStability(pending, stat, now);
       pending.candidate = candidate;
       pendingFiles.set(key, pending);
-      setJobStage("stable", candidate);
+      var reservedPlan = await Coordination.reserveRecordingPlan(pending, candidate, function (entry) {
+        return targetPlanFor(entry, allEntries);
+      });
+      setJobStage("stable", candidate, reservedPlan);
 
       if (!pending.warnedLongRecording && now - pending.firstSeenAt > PENDING_WARNING_MS) {
         pending.warnedLongRecording = true;
@@ -1368,19 +1417,25 @@
         quietMs: STABLE_QUIET_MS,
       })) return;
       candidate.sourceSignature = statIdentitySignature(stat);
+      candidate.recycleEligible = true;
+      reservedPlan.sourceSignature = candidate.sourceSignature;
       await ensureCurrentContext(guard.projectIdentity, guard.sequenceIdentity, guard.generation);
-      await executeCandidate(candidate, allEntries);
+      await executeCandidate(candidate, allEntries, reservedPlan);
     } catch (error) {
       if (isCancellation(error)) throw error;
       var disposition = MonitoringPolicy.failureDisposition(error);
-      var retryableLock = disposition === "retry-file" && isRetryableLock(error);
+      var retryableLock = disposition === "retry-file" && isRetryableLock(error)
+        && !(error.rollbackWarnings && error.rollbackWarnings.length);
       pending.failureCount = Number(pending.failureCount || 0) + 1;
       pending.lockRetries = retryableLock ? Number(pending.lockRetries || 0) + 1 : pending.lockRetries;
-      pending.stablePolls = 0;
+      if (!retryableLock) pending.stablePolls = 0;
       pending.nextAttemptAt = Date.now() + MonitoringPolicy.retryDelayMs(pending.failureCount, retryableLock);
       pendingFiles.set(key, pending);
 
       if (retryableLock) {
+        setJobStage("rename", candidate, pending.plan);
+        currentJob.waitingForLock = true;
+        updateControls();
         if (!pending.lockWarningReported && pending.lockRetries >= LOCK_WARNING_RETRIES) {
           pending.lockWarningReported = true;
           addLog("warn", Core.fileNameFromPath(candidate.mediaPath) + "：Premiere 仍在占用录音文件，释放后会自动继续");
@@ -1458,7 +1513,10 @@
 
         var fallbackInterval = watchFolderValid ? LEARNED_TRACK_FALLBACK_MS : DISCOVERY_TRACK_SCAN_MS;
         var fullTrackProbeDue = now - lastTrackScanAt >= fallbackInterval;
-        if (!sequenceChanged && !eventRequested && !probeFolderKeys.size && !pendingFiles.size && !fullTrackProbeDue) return;
+        if (!sequenceChanged && !eventRequested && !probeFolderKeys.size && !pendingFiles.size && !fullTrackProbeDue) {
+          if (recycler) await recycler.tick();
+          return;
+        }
 
         var snapshot = await collectTrackMedia(context);
         lastTrackScanAt = now;
@@ -1773,6 +1831,7 @@
         snapshot.entries.push({ mediaPath: plans[planIndex].targetPath });
       } catch (error) {
         if (isCancellation(error)) throw error;
+        setJobError(error, plans[planIndex].candidate);
         sessionMetrics.errors += 1;
         var rollback = error.rollbackWarnings && error.rollbackWarnings.length ? "；回滚提示：" + error.rollbackWarnings.join("；") : "";
         addLog("error", Core.fileNameFromPath(plans[planIndex].candidate.mediaPath) + "：" + (error.message || error) + rollback);
@@ -1880,6 +1939,7 @@
 
   function onRefreshButtonClick() {
     normalizedNameChecks.clear();
+    if (recycler) recycler.retry();
     if (monitoring) {
       panelErrorMessage = "";
       requestSoonScan();

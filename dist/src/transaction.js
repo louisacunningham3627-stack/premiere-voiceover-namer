@@ -189,6 +189,7 @@
   }
 
   async function hashFile(fs, nativePath, delay) {
+    delay = delay || function (ms) { return new Promise(function (resolve) { setTimeout(resolve, ms); }); };
     if (!HashApi || typeof HashApi.createHasher !== "function") {
       var unsupported = new Error("当前插件缺少录音内容校验模块");
       unsupported.code = "ENOSYS";
@@ -1036,6 +1037,7 @@
 
   return {
     exists: exists,
+    hashFile: hashFile,
     isTargetConflict: isTargetConflict,
     renameAndRelink: renameAndRelink,
     synchronizeNames: synchronizeNames,

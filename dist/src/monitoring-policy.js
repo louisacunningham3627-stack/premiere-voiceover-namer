@@ -173,6 +173,17 @@
     return "";
   }
 
+  function isRetryableLock(error) {
+    var current = error;
+    for (var depth = 0; current && depth < 4; depth += 1) {
+      var code = String(current.code || "").toUpperCase();
+      if (["EBUSY", "EACCES", "EPERM"].indexOf(code) >= 0) return true;
+      if (/busy|locked|being used|另一个进程|占用/i.test(String(current.message || current))) return true;
+      current = current.cause;
+    }
+    return false;
+  }
+
   function failureDisposition(error) {
     var code = errorCode(error);
     if (code === "VOICEOVER_NAMER_CANCELLED") return "cancel";
@@ -180,6 +191,7 @@
       return "retry-file";
     }
     if (code === "VOICEOVER_NAMER_AMBIGUOUS") return "retry-context";
+    if (isRetryableLock(error)) return "retry-file";
     return "retry-operation";
   }
 
@@ -203,6 +215,7 @@
     observeFileStability: observeFileStability,
     isFileStable: isFileStable,
     failureDisposition: failureDisposition,
+    isRetryableLock: isRetryableLock,
     retryDelayMs: retryDelayMs,
   };
 });

@@ -28,7 +28,7 @@ await rm(zipPath, { force: true });
 await rm(zipShaPath, { force: true });
 await mkdir(packageDirectory, { recursive: true });
 const bundledPluginDirectory = path.join(packageDirectory, "plugin");
-await cp(distDirectory, bundledPluginDirectory, { recursive: true });
+await cp(distDirectory, bundledPluginDirectory, { recursive: true, filter: source => !["native", ".bridge"].includes(path.basename(source)) });
 await cp(path.join(projectRoot, "scripts", "install-user-plugin-macos.sh"), path.join(packageDirectory, "安装-macOS.sh"));
 await cp(path.join(projectRoot, "scripts", "uninstall-user-plugin-macos.sh"), path.join(packageDirectory, "卸载-macOS.sh"));
 await chmod(path.join(packageDirectory, "安装-macOS.sh"), 0o755);
@@ -60,6 +60,8 @@ const guide = `# 赫朝录音命名器 macOS 侧载包
 在当前目录执行 \`bash "./卸载-macOS.sh"\`。脚本只移动插件目录，不直接删除文件。
 
 ## 功能边界
+
+本版本 Windows 新增的自动回收不在 Mac 包中启用；Mac 只保持命名、移动和重链接能力。不会用永久删除代替 macOS 垃圾桶。
 
 插件在录音停止、Premiere 生成 WAV 后等待文件稳定，再把它移入与当前 \`.prproj\` 同级的 \`Adobe Premiere Pro Captured and Generated\` 文件夹，命名为“项目名-32位UUID.wav”，并同步 Premiere 素材名、媒体路径和时间线片段名。跨卷时会排他复制并分块核对 SHA-256，链接成功后才清理原始采集文件；任何不确定情况都会保留源文件并提示。它不会在每条录音后保存整个 \`.prproj\`。旧版创建的“录音”文件夹不会被自动移动或删除。macOS 外置卷权限、跨卷复制、真实录音、重链接和长时间连续录音仍需按项目验收清单验证。
 `;

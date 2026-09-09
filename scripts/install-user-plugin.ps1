@@ -1,7 +1,8 @@
 [CmdletBinding()]
 param(
   [string]$BuildPath = "",
-  [string]$TargetRoot = ""
+  [string]$TargetRoot = "",
+  [switch]$SkipBridgeProtocol
 )
 
 Set-StrictMode -Version Latest
@@ -101,6 +102,7 @@ try {
   if ($installDiff.Count -ne 0) {
     throw "Installed plugin failed SHA-256 verification."
   }
+  & (Join-Path $PSScriptRoot 'configure-recycle-bridge.ps1') -PluginPath $targetPath -PreviousPluginPath $(if ($previousInstall) { $backupPath } else { '' }) -SkipProtocol:$SkipBridgeProtocol
 } catch {
   if (Test-Path -LiteralPath $targetPath) {
     Move-Item -LiteralPath $targetPath -Destination $failedPath

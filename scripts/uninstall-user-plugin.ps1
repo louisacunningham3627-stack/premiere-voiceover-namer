@@ -35,6 +35,7 @@ $runId = "{0}-{1}" -f (Get-Date -Format "yyyyMMdd-HHmmss"), ([guid]::NewGuid().T
 $backupPath = Join-Path $backupRoot ("{0}-uninstalled-{1}" -f $pluginId, $runId)
 
 New-Item -ItemType Directory -Path $backupRoot -Force | Out-Null
+& (Join-Path $PSScriptRoot 'configure-recycle-bridge.ps1') -PluginPath $targetPath -Remove
 Move-Item -LiteralPath $targetPath -Destination $backupPath
 
 [pscustomobject]@{

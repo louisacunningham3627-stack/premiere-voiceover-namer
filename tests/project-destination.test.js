@@ -15,7 +15,7 @@ function functionBody(name, nextName) {
 test('target planning always uses the saved Premiere project recording directory', () => {
   const body = functionBody('targetPlanFor', 'executeCandidate');
   assert.match(body, /recordingFolderForCandidate\(candidate\)/);
-  assert.match(body, /FolderReadiness\.ensure\(fs, targetDirectory\)/);
+  assert.match(body, /FolderReadiness\.ensure\(fs, targetDirectory, uxp\.storage\.localFileSystem\)/);
   assert.match(body, /Core\.joinNativePath\(targetDirectory, targetName, targetSeparator\)/);
   assert.doesNotMatch(body, /Core\.joinNativePath\(sourceParts\.dir/);
 });

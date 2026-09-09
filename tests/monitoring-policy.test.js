@@ -251,6 +251,56 @@ test('cancellation is not classified as a filesystem retry', () => {
   );
 });
 
+test('inner recording execution never publishes an error before retry classification', () => {
+  const source = fs.readFileSync('src/main.js', 'utf8');
+  const body = source.slice(source.indexOf('async function executeCandidate'), source.indexOf('async function synchronizeNormalizedRecordingNames'));
+  assert.doesNotMatch(body, /setJobError/);
+  assert.match(body, /throw error/);
+  const pending = source.slice(source.indexOf('async function advancePending'), source.indexOf('async function scanTick'));
+  assert.match(pending, /error\.rollbackWarnings && error\.rollbackWarnings\.length/);
+  assert.match(pending, /currentJob\.waitingForLock = true/);
+  assert.match(pending, /setJobStage\("rename", candidate, pending\.plan\)/);
+  assert.match(pending, /if \(now < Number\(pending\.nextAttemptAt \|\| 0\)\)[\s\S]*?return;/);
+  const loop = source.slice(source.indexOf('async function scanTick'), source.indexOf('async function scanMissedRecordings'));
+  assert.match(loop, /await advancePending[\s\S]*?continue;/);
+});
+
+test('uncoded UXP locks use the file retry branch, including wrapped causes', () => {
+  for (const error of [
+    new Error('resource busy or locked'),
+    'resource busy or locked',
+    new Error('另一个进程正在占用文件'),
+    new Error('operation failed', { cause: new Error('resource busy or locked') }),
+  ]) {
+    assert.equal(policy.failureDisposition(error), 'retry-file');
+    assert.equal(policy.isRetryableLock(error), true);
+    assert.equal(policy.retryDelayMs(1, true), 500);
+  }
+  for (const [code, expected] of [
+    ['VOICEOVER_NAMER_CANCELLED', 'cancel'],
+    ['VOICEOVER_NAMER_AMBIGUOUS', 'retry-context'],
+  ]) {
+    assert.equal(policy.failureDisposition(Object.assign(new Error('resource busy or locked'), { code })), expected);
+  }
+  assert.equal(policy.failureDisposition(new Error('unrelated failure')), 'retry-operation');
+  assert.equal(policy.isRetryableLock(new Error('unrelated failure')), false);
+});
+
+test('after an uncoded lock, unchanged data remains stable but new writes reset stability', () => {
+  const options = { requiredPolls: 3, quietMs: 3000 };
+  const stat = { size: 10, mtimeMs: 100 };
+  let pending = policy.observeFileStability(null, stat, 1000);
+  pending = policy.observeFileStability(pending, stat, 2500);
+  pending = policy.observeFileStability(pending, stat, 4000);
+  const error = new Error('resource busy or locked');
+  const lock = policy.failureDisposition(error) === 'retry-file' && policy.isRetryableLock(error);
+  if (!lock) pending.stablePolls = 0;
+  pending = policy.observeFileStability(pending, stat, 5200);
+  assert.equal(policy.isFileStable(pending, 5200, options), true);
+  pending = policy.observeFileStability(pending, { size: 20, mtimeMs: 200 }, 5300);
+  assert.equal(policy.isFileStable(pending, 5300, options), false);
+});
+
 test('panel visibility is explicit across show, hide, destroy, and auto-start checks', () => {
   const mainSource = fs.readFileSync('src/main.js', 'utf8');
   assert.match(mainSource, /var\s+panelVisible\s*=\s*false/);

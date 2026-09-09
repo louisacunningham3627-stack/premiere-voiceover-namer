@@ -46,6 +46,11 @@ const requiredFiles = [
   "src/sha256.js",
   "src/transaction.js",
   "src/coordination.js",
+  "src/recycle-policy.js",
+  "src/recycle-auth.js",
+  "src/recycle-host.js",
+  "src/recycle.js",
+  "native/windows/RecycleHelper.cs",
   "src/main.js",
 ];
 
@@ -53,7 +58,7 @@ for (const relativePath of requiredFiles) {
   assert.equal(await exists(path.join(distDirectory, relativePath)), true, `${relativePath} is missing`);
 }
 
-for (const fileName of ["core.js", "state.js", "panel-state.js", "folder-readiness.js", "media-candidates.js", "monitoring-policy.js", "sha256.js", "transaction.js", "coordination.js", "main.js"]) {
+for (const fileName of ["core.js", "state.js", "panel-state.js", "folder-readiness.js", "media-candidates.js", "monitoring-policy.js", "sha256.js", "transaction.js", "coordination.js", "recycle-auth.js", "recycle-policy.js", "recycle-host.js", "recycle.js", "main.js"]) {
   const sourceHash = await digest(path.join(projectRoot, "src", fileName));
   const outputHash = await digest(path.join(distDirectory, "src", fileName));
   assert.equal(outputHash, sourceHash, `dist/src/${fileName} differs from source`);
@@ -70,7 +75,7 @@ const styles = await readFile(path.join(distDirectory, "styles.css"), "utf8");
 const mainSource = await readFile(path.join(distDirectory, "src", "main.js"), "utf8");
 const coreSource = await readFile(path.join(distDirectory, "src", "core.js"), "utf8");
 let previousScriptIndex = -1;
-for (const scriptPath of ["src/core.js", "src/state.js", "src/panel-state.js", "src/folder-readiness.js", "src/media-candidates.js", "src/monitoring-policy.js", "src/sha256.js", "src/transaction.js", "src/coordination.js", "src/main.js"]) {
+for (const scriptPath of ["src/core.js", "src/state.js", "src/panel-state.js", "src/folder-readiness.js", "src/media-candidates.js", "src/monitoring-policy.js", "src/sha256.js", "src/transaction.js", "src/coordination.js", "src/recycle-auth.js", "src/recycle-policy.js", "src/recycle-host.js", "src/recycle.js", "src/main.js"]) {
   assert.match(html, new RegExp(`<script\\s+src=["']${scriptPath.replace(".", "\\.")}["']`));
   const scriptIndex = html.indexOf(`src="${scriptPath}"`);
   assert.ok(scriptIndex > previousScriptIndex, `${scriptPath} is loaded out of order`);
@@ -158,6 +163,8 @@ assert.doesNotMatch(html, /<sp-(?:button|checkbox)\b/i, "UXP controls must use n
 assert.doesNotMatch(styles, /display:\s*grid\b/, "Premiere panel layout must use the UXP-stable flex/block subset");
 
 const topLevel = (await readdir(distDirectory)).sort();
-assert.deepEqual(topLevel, ["icons", "index.html", "manifest.json", "src", "styles.css"]);
+assert.deepEqual(topLevel, ["icons", "index.html", "manifest.json", "native", "src", "styles.css"]);
+assert.equal(await digest(path.join(projectRoot, "native/windows/RecycleHelper.cs")), await digest(path.join(distDirectory, "native/windows/RecycleHelper.cs")));
+if (process.platform === "win32") assert.equal(await exists(path.join(distDirectory, "native/windows/RecycleHelper.exe")), true);
 
 console.log("Verified UXP build: manifest, files, script order, and source hashes are valid.");

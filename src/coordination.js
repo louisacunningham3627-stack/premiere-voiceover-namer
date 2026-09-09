@@ -25,6 +25,13 @@
     };
   }
 
+  async function reserveRecordingPlan(pending, candidate, createPlan) {
+    if (!pending.plan) pending.plan = await createPlan(candidate);
+    pending.plan.candidate = candidate;
+    pending.plan.sourceSignature = candidate.sourceSignature;
+    return pending.plan;
+  }
+
   function createGenerationGuard() {
     var generation = 0;
     return {
@@ -60,6 +67,7 @@
 
   return {
     createOperationQueue: createOperationQueue,
+    reserveRecordingPlan: reserveRecordingPlan,
     createGenerationGuard: createGenerationGuard,
     shouldHandleOperationComplete: shouldHandleOperationComplete,
     markProcessedPath: markProcessedPath,
